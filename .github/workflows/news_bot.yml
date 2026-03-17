@@ -1,0 +1,39 @@
+name: News Bot
+
+on:
+  schedule:
+    - cron: '0 6,9,12,15,18,21 * * *'  # кожні 3 год, 6 разів на день
+  workflow_dispatch:                     # також можна запустити вручну
+
+jobs:
+  post-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python bot.py
+
+      - name: Save database (зберігаємо пам'ять бота)
+        run: |
+          git config user.name  "News Bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add published.db || true
+          git diff --staged --quiet || git commit -m "update db [skip ci]"
+          git push
