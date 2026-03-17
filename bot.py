@@ -3,25 +3,24 @@ import sqlite3
 import hashlib
 import feedparser
 import requests
-import google.generativeai as genai
 from datetime import datetime
 
 # ── Налаштування ──────────────────────────────────────────
 RSS_FEEDS = [
-    "https://www.ukrinform.ua/rss/block-lastnews",   # Укрінформ
-    "https://dou.ua/lenta/feed/",                    # DOU (IT)
-    "https://feeds.bbci.co.uk/ukrainian/rss.xml",    # BBC Ukraine
-    "https://www.pravda.com.ua/rss/view_news/",      # Укрправда
-    "https://techcrunch.com/feed/",                  # TechCrunch
+    "https://www.ukrinform.ua/rss/block-lastnews",
+    "https://dou.ua/lenta/feed/",
+    "https://feeds.bbci.co.uk/ukrainian/rss.xml",
+    "https://www.pravda.com.ua/rss/view_news/",
+    "https://techcrunch.com/feed/",
 ]
 
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
-CHANNEL_ID       = os.environ["TELEGRAM_CHANNEL_ID"]
-GEMINI_API_KEY   = os.environ["GEMINI_API_KEY"]
-DB_PATH          = "published.db"
-MAX_POSTS_PER_RUN = 3   # скільки новин публікуємо за один запуск
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
+CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
+GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
+DB_PATH           = "published.db"
+MAX_POSTS_PER_RUN = 3
 
-# ── База даних (пам'ять про опубліковані новини) ───────────
+# ── База даних ─────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -54,7 +53,7 @@ def fetch_news() -> list[dict]:
     for url in RSS_FEEDS:
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:5]:   # беремо 5 свіжих з кожного
+            for entry in feed.entries[:5]:
                 items.append({
                     "title":   entry.get("title", ""),
                     "summary": entry.get("summary", ""),
@@ -65,11 +64,8 @@ def fetch_news() -> list[dict]:
             print(f"Помилка читання {url}: {e}")
     return items
 
-# ── AI обробка через Gemini ────────────────────────────────
+# ── AI обробка через Groq ──────────────────────────────────
 def rewrite_with_ai(title: str, summary: str, source: str) -> str | None:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
     prompt = f"""Ти редактор популярного українського Telegram-каналу з новинами.
 Перепиши цю новину для каналу. Правила:
 - Мова: українська
@@ -87,10 +83,24 @@ def rewrite_with_ai(title: str, summary: str, source: str) -> str | None:
 Напиши лише готовий пост, без пояснень."""
 
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 400,
+                "temperature": 0.7,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"Помилка Gemini: {e}")
+        print(f"Помилка Groq: {e}")
         return None
 
 # ── Публікація в Telegram ──────────────────────────────────
@@ -114,7 +124,7 @@ def post_to_telegram(text: str, url: str) -> bool:
 
 # ── Головна функція ────────────────────────────────────────
 def main():
-    conn = init_db()
+    conn  = init_db()
     news  = fetch_news()
     count = 0
 
