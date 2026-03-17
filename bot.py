@@ -68,7 +68,7 @@ def fetch_news() -> list[dict]:
 # ── AI обробка через Gemini ────────────────────────────────
 def rewrite_with_ai(title: str, summary: str, source: str) -> str | None:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash-lite")
 
     prompt = f"""Ти редактор популярного українського Telegram-каналу з новинами.
 Перепиши цю новину для каналу. Правила:
