@@ -2,8 +2,11 @@ name: News Bot
 
 on:
   schedule:
-    - cron: '0 6,9,12,15,18,21 * * *'  # кожні 3 год, 6 разів на день
-  workflow_dispatch:                     # також можна запустити вручну
+    - cron: '0 6,9,12,15,18,21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   post-news:
@@ -30,7 +33,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python bot.py
 
-      - name: Save database (зберігаємо пам'ять бота)
+      - name: Save database
         run: |
           git config user.name  "News Bot"
           git config user.email "bot@users.noreply.github.com"
