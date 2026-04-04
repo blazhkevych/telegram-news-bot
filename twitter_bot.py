@@ -146,78 +146,24 @@ def generate_tweet(item: dict) -> str | None:
 
 # ── Публікація в Twitter через OAuth 1.0a ─────────────────
 def post_tweet(text: str, url: str) -> bool:
-    import hmac
-    import hashlib
-    import base64
-    import time
-    import urllib.parse
+    import tweepy
 
     tweet_text = f"{text}\n\n{url}"
-    # Обрізаємо якщо раптом довше 280 символів
     if len(tweet_text) > 280:
-        tweet_text = tweet_text[:255] + f"...\n\n{url}"
-
-    api_url = "https://api.twitter.com/2/tweets"
-    method  = "POST"
-
-    # OAuth 1.0a підпис
-    oauth_timestamp = str(int(time.time()))
-    oauth_nonce     = base64.b64encode(os.urandom(32)).decode().strip("=+/")[:32]
-
-    oauth_params = {
-        "oauth_consumer_key":     TWITTER_API_KEY,
-        "oauth_nonce":            oauth_nonce,
-        "oauth_signature_method": "HMAC-SHA1",
-        "oauth_timestamp":        oauth_timestamp,
-        "oauth_token":            TWITTER_ACCESS_TOKEN,
-        "oauth_version":          "1.0",
-    }
-
-    param_string = "&".join(
-        f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
-        for k, v in sorted(oauth_params.items())
-    )
-    base_string = "&".join([
-        method,
-        urllib.parse.quote(api_url, safe=""),
-        urllib.parse.quote(param_string, safe=""),
-    ])
-    signing_key = (
-        urllib.parse.quote(TWITTER_API_SECRET, safe="") + "&" +
-        urllib.parse.quote(TWITTER_ACCESS_SECRET, safe="")
-    )
-    signature = base64.b64encode(
-        hmac.new(
-            signing_key.encode(),
-            base_string.encode(),
-            hashlib.sha1
-        ).digest()
-    ).decode()
-
-    oauth_params["oauth_signature"] = signature
-    auth_header = "OAuth " + ", ".join(
-        f'{urllib.parse.quote(k, safe="")}="{urllib.parse.quote(v, safe="")}"'
-        for k, v in sorted(oauth_params.items())
-    )
+        tweet_text = tweet_text[:252] + f"...\n\n{url}"
 
     try:
-        response = requests.post(
-            api_url,
-            headers={
-                "Authorization": auth_header,
-                "Content-Type":  "application/json",
-            },
-            json={"text": tweet_text},
-            timeout=30,
+        client = tweepy.Client(
+            consumer_key=TWITTER_API_KEY,
+            consumer_secret=TWITTER_API_SECRET,
+            access_token=TWITTER_ACCESS_TOKEN,
+            access_token_secret=TWITTER_ACCESS_SECRET,
         )
-        if response.status_code in (200, 201):
-            print(f"✅ Твіт опубліковано: {url}")
-            return True
-        else:
-            print(f"❌ Помилка Twitter: {response.status_code} {response.text}")
-            return False
+        client.create_tweet(text=tweet_text)
+        print(f"✅ Твіт опубліковано: {url}")
+        return True
     except Exception as e:
-        print(f"❌ Помилка запиту: {e}")
+        print(f"❌ Помилка Twitter: {e}")
         return False
 
 # ── Головна функція ────────────────────────────────────────
