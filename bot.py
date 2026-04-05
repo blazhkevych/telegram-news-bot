@@ -16,7 +16,7 @@ RSS_FEEDS = [
     {"url": "https://tsn.ua/rss/full.rss",                     "lang": "uk"},
     {"url": "https://www.unian.ua/rss/news.rss",               "lang": "uk"},
     {"url": "https://ua.korrespondent.net/rss/all.rss",        "lang": "uk"},
-    {"url": "https://nv.ua/rss/all.xml",                       "lang": "uk"},
+    {"url": "https://nv.ua/ukr/rss/all.xml",                   "lang": "uk"},
     {"url": "https://dou.ua/lenta/feed/",                      "lang": "uk"},
     {"url": "https://techcrunch.com/feed/",                    "lang": "en"},
     {"url": "https://www.theverge.com/rss/index.xml",          "lang": "en"},
@@ -103,19 +103,27 @@ def mark_published(conn, url, title):
 def get_topic_count(conn, keywords):
     max_count = 0
     for kw in keywords:
-        row = conn.execute("SELECT count FROM seen_topics WHERE keyword=?", (kw,)).fetchone()
+        row = conn.execute(
+            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
+        ).fetchone()
         if row:
             max_count = max(max_count, row[0])
     return max_count
 
 def update_topic_count(conn, keywords):
     for kw in keywords:
-        existing = conn.execute("SELECT count FROM seen_topics WHERE keyword=?", (kw,)).fetchone()
+        existing = conn.execute(
+            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
+        ).fetchone()
         if existing:
-            conn.execute("UPDATE seen_topics SET count=count+1 WHERE keyword=?", (kw,))
+            conn.execute(
+                "UPDATE seen_topics SET count=count+1 WHERE keyword=?", (kw,)
+            )
         else:
-            conn.execute("INSERT INTO seen_topics VALUES (?,1,?)",
-                         (kw, datetime.utcnow().isoformat()))
+            conn.execute(
+                "INSERT INTO seen_topics VALUES (?,1,?)",
+                (kw, datetime.utcnow().isoformat())
+            )
     conn.commit()
 
 def extract_keywords(title):
@@ -125,7 +133,8 @@ def extract_keywords(title):
 def get_category(title, summary):
     text = (title + " " + summary).lower()
     for category, keywords in CATEGORIES.items():
-        if any(kw in text for kw in keywords):
+        matches = sum(1 for kw in keywords if kw in text)
+        if matches >= 1:
             return category
     return "📰 Новини"
 
@@ -133,27 +142,33 @@ def is_spam(title, summary):
     text = (title + " " + summary).lower()
     return any(kw in text for kw in SPAM_KEYWORDS)
 
+def is_russian(title, summary):
+    """Визначає чи текст російською мовою."""
+    text = (title + " " + summary).lower()
+    russian_markers = [
+        "из ", "это ", "для ", "все ", "как ", "так ", "его ",
+        "что ", "или ", "при ", "они ", "если ", "чтобы ",
+    ]
+    count = sum(1 for marker in russian_markers if marker in text)
+    return count >= 3
+
 # ── Витяг картинки з RSS ───────────────────────────────────
-def extract_image(entry) -> str | None:
-    # 1. Медіа контент (media:content)
+def extract_image(entry):
     if hasattr(entry, "media_content") and entry.media_content:
         for m in entry.media_content:
             if m.get("type", "").startswith("image"):
                 return m.get("url")
 
-    # 2. Enclosure (вкладення)
     if hasattr(entry, "enclosures") and entry.enclosures:
         for e in entry.enclosures:
             if e.get("type", "").startswith("image"):
                 return e.get("href") or e.get("url")
 
-    # 3. Картинка в тексті summary
     if hasattr(entry, "summary"):
         match = re.search(r']+src=["\']([^"\']+)["\']', entry.summary or "")
         if match:
             return match.group(1)
 
-    # 4. Картинка в content
     if hasattr(entry, "content") and entry.content:
         for c in entry.content:
             match = re.search(r']+src=["\']([^"\']+)["\']', c.get("value", ""))
@@ -162,8 +177,7 @@ def extract_image(entry) -> str | None:
 
     return None
 
-# ── Перевірка чи картинка доступна ────────────────────────
-def is_valid_image(url: str) -> bool:
+def is_valid_image(url):
     try:
         r = requests.head(url, timeout=5, allow_redirects=True)
         content_type = r.headers.get("content-type", "")
@@ -186,8 +200,11 @@ def fetch_news(conn):
                     continue
                 if is_spam(title, summary):
                     continue
+                if is_russian(title, summary):
+                    print(f"🚫 Російська мова: {title[:50]}")
+                    continue
 
-                keywords = extract_keywords(title)
+                keywords  = extract_keywords(title)
                 update_topic_count(conn, keywords)
                 image_url = extract_image(entry)
 
@@ -251,12 +268,9 @@ def rewrite_with_ai(item):
 # ── Публікація в Telegram ──────────────────────────────────
 def post_to_telegram(text, url, category, image_url=None):
     full_text = f"{category}\n\n{text}\n\n🔗 [Читати повністю]({url})"
-
-    # Перевіряємо картинку
     valid_image = image_url and is_valid_image(image_url)
 
     if valid_image:
-        # Публікуємо з картинкою
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
             json={
@@ -267,7 +281,6 @@ def post_to_telegram(text, url, category, image_url=None):
             }
         )
     else:
-        # Публікуємо без картинки
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={
