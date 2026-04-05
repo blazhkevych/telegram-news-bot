@@ -1,2 +1,2 @@
 # telegram-news-bot
-for tg channel UA News
+tg channel UA News
