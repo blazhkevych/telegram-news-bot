@@ -4,11 +4,11 @@ import hashlib
 import feedparser
 import requests
 import time
+import re
 from datetime import datetime
 
-# ── Джерела новин (20 джерел) ─────────────────────────────
+# ── Джерела новин ─────────────────────────────────────────
 RSS_FEEDS = [
-    # Загальні українські
     {"url": "https://www.ukrinform.ua/rss/block-lastnews",     "lang": "uk"},
     {"url": "https://www.pravda.com.ua/rss/view_news/",        "lang": "uk"},
     {"url": "https://suspilne.media/rss/news.xml",             "lang": "uk"},
@@ -17,23 +17,18 @@ RSS_FEEDS = [
     {"url": "https://www.unian.ua/rss/news.rss",               "lang": "uk"},
     {"url": "https://ua.korrespondent.net/rss/all.rss",        "lang": "uk"},
     {"url": "https://nv.ua/rss/all.xml",                       "lang": "uk"},
-    # IT та технології
     {"url": "https://dou.ua/lenta/feed/",                      "lang": "uk"},
     {"url": "https://techcrunch.com/feed/",                    "lang": "en"},
     {"url": "https://www.theverge.com/rss/index.xml",          "lang": "en"},
     {"url": "https://feeds.arstechnica.com/arstechnica/index", "lang": "en"},
-    # Міжнародні
     {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",      "lang": "uk"},
     {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",     "lang": "en"},
     {"url": "https://rss.dw.com/xml/rss-uk-ukr",               "lang": "uk"},
-    # Економіка
     {"url": "https://mind.ua/rss.xml",                         "lang": "uk"},
     {"url": "https://biz.liga.net/all/rss.xml",                "lang": "uk"},
-    # Наука
     {"url": "https://www.sciencedaily.com/rss/all.xml",        "lang": "en"},
 ]
 
-# ── Тематичні рубрики ──────────────────────────────────────
 CATEGORIES = {
     "🇺🇦 Україна": [
         "україн", "зеленськ", "рада", "кабмін", "зсу", "фронт",
@@ -58,7 +53,6 @@ CATEGORIES = {
     ],
 }
 
-# ── Спам-фільтр (ці слова = пропускаємо) ──────────────────
 SPAM_KEYWORDS = [
     "реклама", "знижка", "акція", "розпродаж", "купи зараз",
     "промокод", "affiliate", "sponsored", "advertisement",
@@ -68,92 +62,107 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
-MAX_POSTS_PER_RUN = 5   # збільшили до 5 постів за запуск
+MAX_POSTS_PER_RUN = 5
 
 # ── База даних ─────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS published (
-            hash         TEXT PRIMARY KEY,
-            title        TEXT,
-            published_at TEXT
+            hash TEXT PRIMARY KEY, title TEXT, published_at TEXT
         )
     """)
-    # Таблиця для фактчекінгу — зберігаємо ключові слова новин
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_topics (
-            keyword      TEXT PRIMARY KEY,
-            count        INTEGER DEFAULT 1,
-            first_seen   TEXT
+            keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
         )
     """)
     conn.commit()
     return conn
 
-def is_published(conn, url: str) -> bool:
+def is_published(conn, url):
     h = hashlib.md5(url.encode()).hexdigest()
-    return conn.execute(
-        "SELECT 1 FROM published WHERE hash=?", (h,)
-    ).fetchone() is not None
+    return conn.execute("SELECT 1 FROM published WHERE hash=?", (h,)).fetchone()
 
-def mark_published(conn, url: str, title: str):
+def mark_published(conn, url, title):
     h = hashlib.md5(url.encode()).hexdigest()
-    conn.execute(
-        "INSERT OR IGNORE INTO published VALUES (?,?,?)",
-        (h, title, datetime.utcnow().isoformat())
-    )
+    conn.execute("INSERT OR IGNORE INTO published VALUES (?,?,?)",
+                 (h, title, datetime.utcnow().isoformat()))
     conn.commit()
 
-# ── Фактчекінг — підрахунок згадувань теми ────────────────
-def get_topic_count(conn, keywords: list[str]) -> int:
-    """Повертає скільки різних джерел згадали цю тему."""
+def get_topic_count(conn, keywords):
     max_count = 0
     for kw in keywords:
-        row = conn.execute(
-            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
-        ).fetchone()
+        row = conn.execute("SELECT count FROM seen_topics WHERE keyword=?", (kw,)).fetchone()
         if row:
             max_count = max(max_count, row[0])
     return max_count
 
-def update_topic_count(conn, keywords: list[str]):
+def update_topic_count(conn, keywords):
     for kw in keywords:
-        existing = conn.execute(
-            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
-        ).fetchone()
+        existing = conn.execute("SELECT count FROM seen_topics WHERE keyword=?", (kw,)).fetchone()
         if existing:
-            conn.execute(
-                "UPDATE seen_topics SET count=count+1 WHERE keyword=?", (kw,)
-            )
+            conn.execute("UPDATE seen_topics SET count=count+1 WHERE keyword=?", (kw,))
         else:
-            conn.execute(
-                "INSERT INTO seen_topics VALUES (?,1,?)",
-                (kw, datetime.utcnow().isoformat())
-            )
+            conn.execute("INSERT INTO seen_topics VALUES (?,1,?)",
+                         (kw, datetime.utcnow().isoformat()))
     conn.commit()
 
-def extract_keywords(title: str) -> list[str]:
-    """Витягує ключові слова для фактчекінгу."""
+def extract_keywords(title):
     words = title.lower().split()
-    # Беремо слова довші за 5 символів як значущі
     return [w.strip(".,!?«»\"'") for w in words if len(w) > 5]
 
-# ── Визначення категорії ───────────────────────────────────
-def get_category(title: str, summary: str) -> str:
+def get_category(title, summary):
     text = (title + " " + summary).lower()
     for category, keywords in CATEGORIES.items():
         if any(kw in text for kw in keywords):
             return category
-    return "📰 Новини"  # за замовчуванням
+    return "📰 Новини"
 
-# ── Спам-фільтр ────────────────────────────────────────────
-def is_spam(title: str, summary: str) -> bool:
+def is_spam(title, summary):
     text = (title + " " + summary).lower()
     return any(kw in text for kw in SPAM_KEYWORDS)
 
-# ── Збір новин із RSS ──────────────────────────────────────
-def fetch_news(conn) -> list[dict]:
+# ── Витяг картинки з RSS ───────────────────────────────────
+def extract_image(entry) -> str | None:
+    # 1. Медіа контент (media:content)
+    if hasattr(entry, "media_content") and entry.media_content:
+        for m in entry.media_content:
+            if m.get("type", "").startswith("image"):
+                return m.get("url")
+
+    # 2. Enclosure (вкладення)
+    if hasattr(entry, "enclosures") and entry.enclosures:
+        for e in entry.enclosures:
+            if e.get("type", "").startswith("image"):
+                return e.get("href") or e.get("url")
+
+    # 3. Картинка в тексті summary
+    if hasattr(entry, "summary"):
+        match = re.search(r']+src=["\']([^"\']+)["\']', entry.summary or "")
+        if match:
+            return match.group(1)
+
+    # 4. Картинка в content
+    if hasattr(entry, "content") and entry.content:
+        for c in entry.content:
+            match = re.search(r']+src=["\']([^"\']+)["\']', c.get("value", ""))
+            if match:
+                return match.group(1)
+
+    return None
+
+# ── Перевірка чи картинка доступна ────────────────────────
+def is_valid_image(url: str) -> bool:
+    try:
+        r = requests.head(url, timeout=5, allow_redirects=True)
+        content_type = r.headers.get("content-type", "")
+        return r.status_code == 200 and "image" in content_type
+    except:
+        return False
+
+# ── Збір новин ─────────────────────────────────────────────
+def fetch_news(conn):
     items = []
     for feed_cfg in RSS_FEEDS:
         try:
@@ -166,40 +175,35 @@ def fetch_news(conn) -> list[dict]:
                 if not url or is_published(conn, url):
                     continue
                 if is_spam(title, summary):
-                    print(f"🚫 Спам: {title[:50]}")
                     continue
 
-                # Оновлюємо лічильник згадувань теми
                 keywords = extract_keywords(title)
                 update_topic_count(conn, keywords)
+                image_url = extract_image(entry)
 
                 items.append({
-                    "title":    title,
-                    "summary":  summary,
-                    "url":      url,
-                    "source":   feed.feed.get("title", ""),
-                    "lang":     feed_cfg["lang"],
-                    "keywords": keywords,
-                    "category": get_category(title, summary),
+                    "title":     title,
+                    "summary":   summary,
+                    "url":       url,
+                    "source":    feed.feed.get("title", ""),
+                    "lang":      feed_cfg["lang"],
+                    "keywords":  keywords,
+                    "category":  get_category(title, summary),
+                    "image_url": image_url,
                 })
         except Exception as e:
-            print(f"⚠️ Помилка читання {feed_cfg['url']}: {e}")
+            print(f"⚠️ Помилка {feed_cfg['url']}: {e}")
 
-    # Сортуємо — спочатку новини що згадуються в кількох джерелах
-    items.sort(
-        key=lambda x: get_topic_count(conn, x["keywords"]),
-        reverse=True
-    )
+    items.sort(key=lambda x: get_topic_count(conn, x["keywords"]), reverse=True)
     return items
 
-# ── AI обробка через Groq ──────────────────────────────────
-def rewrite_with_ai(item: dict) -> str | None:
+# ── AI обробка ─────────────────────────────────────────────
+def rewrite_with_ai(item):
     lang_note = (
         "Новина англійською — переклади та перепиши українською."
         if item["lang"] == "en"
         else "Новина вже українською — перепиши живою мовою."
     )
-
     prompt = f"""Ти редактор популярного українського Telegram-каналу з новинами.
 {lang_note}
 
@@ -207,10 +211,10 @@ def rewrite_with_ai(item: dict) -> str | None:
 - Мова виключно українська
 - Довжина: 3–5 речень, коротко і по суті
 - Починай з найголовнішого факту
-- Стиль: живий, зрозумілий, без канцеляризмів і сенсаційності
+- Стиль: живий, зрозумілий, без канцеляризмів
 - НЕ використовуй хештеги
 - НЕ пиши "Джерело:" в тексті
-- НЕ вигадуй факти яких немає в оригіналі
+- НЕ вигадуй факти
 
 Заголовок: {item['title']}
 Текст: {item['summary'][:800]}
@@ -221,16 +225,11 @@ def rewrite_with_ai(item: dict) -> str | None:
     try:
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model":       "llama-3.3-70b-versatile",
-                "messages":    [{"role": "user", "content": prompt}],
-                "max_tokens":  400,
-                "temperature": 0.7,
-            },
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile",
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 400, "temperature": 0.7},
             timeout=30,
         )
         response.raise_for_status()
@@ -240,19 +239,38 @@ def rewrite_with_ai(item: dict) -> str | None:
         return None
 
 # ── Публікація в Telegram ──────────────────────────────────
-def post_to_telegram(text: str, url: str, category: str) -> bool:
+def post_to_telegram(text, url, category, image_url=None):
     full_text = f"{category}\n\n{text}\n\n🔗 [Читати повністю]({url})"
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id":                  CHANNEL_ID,
-            "text":                     full_text,
-            "parse_mode":               "Markdown",
-            "disable_web_page_preview": False,
-        }
-    )
+
+    # Перевіряємо картинку
+    valid_image = image_url and is_valid_image(image_url)
+
+    if valid_image:
+        # Публікуємо з картинкою
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            json={
+                "chat_id":    CHANNEL_ID,
+                "photo":      image_url,
+                "caption":    full_text,
+                "parse_mode": "Markdown",
+            }
+        )
+    else:
+        # Публікуємо без картинки
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id":                  CHANNEL_ID,
+                "text":                     full_text,
+                "parse_mode":               "Markdown",
+                "disable_web_page_preview": False,
+            }
+        )
+
     if response.status_code == 200:
-        print(f"✅ Опубліковано [{category}]: {url}")
+        img_status = "🖼" if valid_image else "📝"
+        print(f"✅ {img_status} Опубліковано [{category}]: {url}")
         return True
     else:
         print(f"❌ Помилка Telegram: {response.text}")
@@ -272,7 +290,6 @@ def main():
         if not item["url"]:
             continue
 
-        # Фактчекінг: публікуємо якщо тема згадана 2+ рази
         topic_count = get_topic_count(conn, item["keywords"])
         if topic_count < 2:
             print(f"⏳ Чекаємо підтвердження: {item['title'][:50]}")
@@ -283,12 +300,12 @@ def main():
         if not post_text:
             continue
 
-        if post_to_telegram(post_text, item["url"], item["category"]):
+        if post_to_telegram(post_text, item["url"], item["category"], item.get("image_url")):
             mark_published(conn, item["url"], item["title"])
             count += 1
-            time.sleep(3)  # пауза між постами
+            time.sleep(3)
 
-    print(f"\n🏁 Готово. Опубліковано {count} новин.")
+    print(f"\n🏁 Готово. Опубліковано {count} постів.")
     conn.close()
 
 if __name__ == "__main__":
