@@ -132,9 +132,19 @@ def extract_keywords(title):
 
 def get_category(title, summary):
     text = (title + " " + summary).lower()
-    for category, keywords in CATEGORIES.items():
-        matches = sum(1 for kw in keywords if kw in text)
-        if matches >= 1:
+    # Важливий порядок — від найпріоритетніших
+    priority_order = [
+        "🇺🇦 Україна",
+        "🌍 Світ",
+        "⚡ Енергетика",
+        "💰 Економіка",
+        "💻 Технології",
+        "🏥 Здоров'я",
+        "🔬 Наука",
+    ]
+    for category in priority_order:
+        keywords = CATEGORIES[category]
+        if any(kw in text for kw in keywords):
             return category
     return "📰 Новини"
 
