@@ -35,9 +35,9 @@ CATEGORIES = {
         "окупац", "деокупац", "мобілізац", "обстріл", "ракет", "київ",
     ],
     "🌍 Світ": [
-    "трамп", "байден", "нато", "євросоюз", "оон", "кремль",
-    "путін", "сша", "великобритан", "франц", "німеч", "китай",
-    "german", "military", "approval", "армія", "військ", "мобіліз",
+        "трамп", "байден", "нато", "євросоюз", "оон", "кремль",
+        "путін", "сша", "великобритан", "франц", "німеч", "китай",
+        "german", "military", "approval", "армія", "військ", "мобіліз",
     ],
     "💻 Технології": [
         "штучний інтелект", "openai", "google", "apple", "microsoft",
@@ -133,7 +133,6 @@ def extract_keywords(title):
 
 def get_category(title, summary):
     text = (title + " " + summary).lower()
-    # Важливий порядок — від найпріоритетніших
     priority_order = [
         "🇺🇦 Україна",
         "🌍 Світ",
@@ -154,7 +153,6 @@ def is_spam(title, summary):
     return any(kw in text for kw in SPAM_KEYWORDS)
 
 def is_russian(title, summary):
-    """Визначає чи текст російською мовою."""
     text = (title + " " + summary).lower()
     russian_markers = [
         "из ", "это ", "для ", "все ", "как ", "так ", "его ",
@@ -169,23 +167,19 @@ def extract_image(entry):
         for m in entry.media_content:
             if m.get("type", "").startswith("image"):
                 return m.get("url")
-
     if hasattr(entry, "enclosures") and entry.enclosures:
         for e in entry.enclosures:
             if e.get("type", "").startswith("image"):
                 return e.get("href") or e.get("url")
-
     if hasattr(entry, "summary"):
         match = re.search(r']+src=["\']([^"\']+)["\']', entry.summary or "")
         if match:
             return match.group(1)
-
     if hasattr(entry, "content") and entry.content:
         for c in entry.content:
             match = re.search(r']+src=["\']([^"\']+)["\']', c.get("value", ""))
             if match:
                 return match.group(1)
-
     return None
 
 def is_valid_image(url):
@@ -265,7 +259,7 @@ def rewrite_with_ai(item):
 Джерело: {item['source']}
 
 Напиши лише готовий текст посту або слово SKIP."""
-    
+
     try:
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -338,6 +332,11 @@ def main():
         print(f"📝 Обробляю [{item['category']}]: {item['title'][:50]}...")
         post_text = rewrite_with_ai(item)
         if not post_text:
+            continue
+
+        # Пропускаємо нерелевантні новини
+        if post_text.strip().upper() == "SKIP":
+            print(f"⏭ Нерелевантна новина: {item['title'][:50]}")
             continue
 
         if post_to_telegram(post_text, item["url"], item["category"], item.get("image_url")):
