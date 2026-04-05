@@ -279,7 +279,7 @@ def rewrite_with_ai(item):
 
 # ── Публікація в Telegram ──────────────────────────────────
 def post_to_telegram(text, url, category, image_url=None):
-    full_text = f"{category}\n\n{text}\n\n🔗 [Читати повністю]({url})"
+    full_text = f"{text}\n\n🔗 [Читати повністю]({url})"
     valid_image = image_url and is_valid_image(image_url)
 
     if valid_image:
