@@ -11,6 +11,8 @@ print(f"🕐 Київський час: {now.strftime('%H:%M')} ({now.strftime('
 if hour == 6:
     print("🌅 Запускаємо ранковий дайджест...")
     subprocess.run(["python", "digest.py"], env={**__import__('os').environ, "DIGEST_TYPE": "morning"})
+    print("📊 Запускаємо статистику втрат...")
+    subprocess.run(["python", "war_stats.py"])
 
 elif hour == 21:
     print("🌙 Запускаємо вечірній підсумок...")
