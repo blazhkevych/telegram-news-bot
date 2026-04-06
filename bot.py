@@ -160,6 +160,7 @@ def fetch_news(conn):
     return items
 
 def rewrite_with_ai(item):
+    time.sleep(2)
     lang_note = (
         "Новина англійською — переклади та перепиши українською."
         if item["lang"] == "en"
