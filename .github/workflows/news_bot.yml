@@ -2,15 +2,16 @@ name: News Bot
 
 on:
   schedule:
-    - cron: '0 * * * *'   # щогодини — Python сам вирішить що робити
+    - cron: '0 * * * *'
   workflow_dispatch:
-  
+
 permissions:
   contents: write
 
 jobs:
   post-news:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -25,32 +26,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Morning digest
-        if: github.event.schedule == '0 5 * * *'
+      - name: Run scheduler
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          DIGEST_TYPE: morning
-        run: python digest.py
-
-      - name: Run news bot
-        if: github.event.schedule != '0 5 * * *' && github.event.schedule != '0 19 * * *'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python bot.py
-
-      - name: Evening digest
-        if: github.event.schedule == '0 19 * * *'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          DIGEST_TYPE: evening
-        run: python digest.py
+        run: python scheduler.py
 
       - name: Run feedback bot
         env:
