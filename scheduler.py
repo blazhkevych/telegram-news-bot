@@ -16,7 +16,7 @@ elif hour == 21:
     print("🌙 Запускаємо вечірній підсумок...")
     subprocess.run(["python", "digest.py"], env={**__import__('os').environ, "DIGEST_TYPE": "evening"})
 
-elif hour in (7, 9, 11, 12, 13, 16, 19):
+elif hour in (7, 9, 11, 13, 16, 19):
     print("📰 Запускаємо збір новин...")
     subprocess.run(["python", "bot.py"])
 
