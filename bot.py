@@ -187,28 +187,24 @@ def rewrite_with_ai(item):
 
 Напиши лише готовий текст або SKIP."""
 
-    for attempt in range(3):
-        try:
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": "llama-3.3-70b-versatile",
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 400, "temperature": 0.6},
-                timeout=30,
-            )
-            if r.status_code == 429:
-                wait = int(r.headers.get("retry-after", 10))
-                print(f"⏳ Ліміт Groq — чекаємо {wait}с...")
-                time.sleep(wait + 1)
-                continue
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"❌ Groq спроба {attempt+1}: {e}")
-            time.sleep(5)
-    return None
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile",
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 400, "temperature": 0.6},
+            timeout=30,
+        )
+        if r.status_code == 429:
+            print("⚠️ Groq ліміт вичерпано — завершуємо запуск.")
+            return "RATE_LIMIT"
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"❌ Groq: {e}")
+        return None
 
 def post_to_telegram(text, url, image_url=None):
     full_text = f"{text}\n\n🔗 [Читати повністю]({url})"
@@ -252,6 +248,9 @@ def main():
         post_text = rewrite_with_ai(item)
         if not post_text:
             continue
+        if post_text == "RATE_LIMIT":
+            print("🛑 Зупиняємо — ліміт Groq. Наступний запуск через годину.")
+            break    
         if post_text.strip().upper() == "SKIP":
             print(f"⏭ Нерелевантна: {item['title'][:50]}")
             continue
