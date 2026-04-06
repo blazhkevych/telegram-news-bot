@@ -21,6 +21,7 @@ elif hour == 21:
 elif hour in (7, 9, 11, 12, 13, 16, 19):
     print("📰 Запускаємо збір новин...")
     subprocess.run(["python", "bot.py"])
+    subprocess.run(["python", "war_stats.py"])
 
 else:
     print(f"😴 Година {hour}:00 — нічого не запускаємо.")
