@@ -8,24 +8,18 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 
-def fetch_stats() -> str | None:
-    """Парсить останнє зведення Генштабу ЗСУ."""
+def fetch_stats():
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        # Беремо RSS Укрінформу з тегом генштаб
-        r = requests.get(
-            "https://www.ukrinform.ua/rss/block-ato",
-            headers=headers, timeout=15
-        )
-        from xml.etree import ElementTree as ET
-        root = ET.fromstring(r.content)
-        for item in root.iter("item"):
-            title = item.find("title").text or ""
-            desc  = item.find("description").text or ""
-            link  = item.find("link").text or ""
-            # Шукаємо зведення Генштабу
-            if any(kw in title.lower() for kw in ["бойові втрати", "генштаб", "зведення"]):
-                return {"title": title, "text": desc, "url": link}
+        import feedparser
+        feed = feedparser.parse("https://www.ukrinform.ua/rss/block-ato")
+        for entry in feed.entries:
+            title = entry.get("title", "")
+            summary = entry.get("summary", "")
+            url = entry.get("link", "")
+            if any(kw in title.lower() for kw in [
+                "бойові втрати", "генштаб", "зведення", "втрати ворога"
+            ]):
+                return {"title": title, "text": summary, "url": url}
     except Exception as e:
         print(f"⚠️ Помилка парсингу: {e}")
     return None
