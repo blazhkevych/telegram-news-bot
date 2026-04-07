@@ -26,6 +26,8 @@ RSS_FEEDS = [
     {"url": "https://mind.ua/rss.xml",                         "lang": "uk"},
     {"url": "https://biz.liga.net/all/rss.xml",                "lang": "uk"},
     {"url": "https://www.sciencedaily.com/rss/all.xml",        "lang": "en"},
+    {"url": "https://www.oporaua.org/feed",                    "lang": "uk"},
+    {"url": "https://bihus.info/feed",                         "lang": "uk"},
 ]
 
 SPAM_KEYWORDS = [
