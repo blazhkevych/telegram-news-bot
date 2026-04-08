@@ -24,7 +24,7 @@ RSS_FEEDS = [
     {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",     "lang": "en"},
     {"url": "https://rss.dw.com/xml/rss-uk-ukr",               "lang": "uk"},
     {"url": "https://mind.ua/rss.xml",                         "lang": "uk"},
-    {"url": "https://biz.liga.net/all/rss.xml",                "lang": "uk"},
+    {"url": "https://biz.liga.net/ukr/all/rss.xml",            "lang": "uk"},
     {"url": "https://www.sciencedaily.com/rss/all.xml",        "lang": "en"},
     {"url": "https://www.oporaua.org/feed",                    "lang": "uk"},
     {"url": "https://bihus.info/feed",                         "lang": "uk"},
@@ -280,7 +280,7 @@ def main():
         if post_text == "RATE_LIMIT":
             print("🛑 Зупиняємо — ліміт Groq. Наступний запуск через годину.")
             break
-        if post_text.strip().upper() == "SKIP":
+        if post_text.strip().upper().startswith("SKIP"):
             print(f"⏭ AI пропустив: {item['title'][:50]}")
             continue
 
