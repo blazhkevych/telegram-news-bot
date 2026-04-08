@@ -47,7 +47,7 @@ def format_stats(item: dict) -> str | None:
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}",
                      "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile",
+            json={"model": "llama-3.1-8b-instant",
                   "messages": [{"role": "user", "content": prompt}],
                   "max_tokens": 400, "temperature": 0.3},
             timeout=30,
