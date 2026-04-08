@@ -1,104 +1,90 @@
 import os
 import requests
-import feedparser
-from datetime import date
+import re
+from bs4 import BeautifulSoup
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
-GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 
-SOURCES = [
-    "https://www.ukrinform.ua/rss/block-lastnews",
-    "https://suspilne.media/rss/news.xml",
-    "https://www.unian.ua/rss/news.rss",
-]
+def fetch_losses_image():
+    """Парсить сторінку ЗСУ і отримує актуальне посилання на картинку втрат."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get("https://www.zsu.gov.ua/oriientovni-vtraty-protyvnyka",
+                        headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-KEYWORDS = [
-    "бойові втрати", "втрати ворога", "генштаб",
-    "знищено", "збито", "ппо", "повітряна",
-    "загарбник", "окупант", "особового складу",
-    "танк", "артилер", "безпілотн", "крилат",
-    "зведення", "станом на",
-]
+        # Шукаємо картинку з kill-statistic в URL
+        for img in soup.find_all("img"):
+            src = img.get("src", "") or img.get("data-src", "")
+            if "kill-statistic" in src or "statistic" in src.lower():
+                # Якщо відносний URL — додаємо домен
+                if src.startswith("/"):
+                    src = "https://www.zsu.gov.ua" + src
+                return src
 
-def fetch_stats():
-    for source_url in SOURCES:
-        try:
-            feed = feedparser.parse(source_url)
-            for entry in feed.entries[:20]:
-                title   = entry.get("title", "")
-                summary = entry.get("summary", "")
-                url     = entry.get("link", "")
-                text    = (title + " " + summary).lower()
-                matches = sum(1 for kw in KEYWORDS if kw in text)
-                if matches >= 2:
-                    print(f"✅ Знайдено зведення: {title[:60]}")
-                    return {"title": title, "text": summary, "url": url}
-        except Exception as e:
-            print(f"⚠️ {source_url}: {e}")
+        # Шукаємо в Next.js image тегах
+        for tag in soup.find_all(True):
+            for attr in ["src", "data-src", "srcset"]:
+                val = tag.get(attr, "")
+                if "kill-statistic" in val:
+                    # Витягуємо URL з Next.js формату
+                    match = re.search(r'url=([^&]+)', val)
+                    if match:
+                        from urllib.parse import unquote
+                        return unquote(match.group(1))
+
+    except Exception as e:
+        print(f"⚠️ Помилка парсингу: {e}")
     return None
 
-def format_stats(item):
-    prompt = f"""Ти редактор українського Telegram-каналу UA News.
-Перед тобою новина про втрати ворога або зведення ППО.
+def post_image_to_telegram(image_url):
+    """Публікує картинку в Telegram канал."""
+    caption = "📊 *Орієнтовні втрати противника*\n\nДжерело: Генеральний штаб ЗСУ"
 
-Відформатуй як пост для Telegram:
-- Починай з "📊 Зведення станом на [дата]"
-- Виділи ключові цифри окремими рядками з emoji
-- Особовий склад: 👥
-- Танки: 🪖
-- Артилерія: 💥
-- Літаки/вертольоти: ✈️
-- Дрони: 🚁
-- Кораблі: 🚢
-- В кінці: "Джерело: Генеральний штаб ЗСУ"
-- Числа тільки цифрами
-- БЕЗ хештегів
-
-Заголовок: {item['title']}
-Текст: {item['text'][:1000]}
-
-Напиши лише готовий пост."""
-
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": "llama-3.1-8b-instant",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "max_tokens": 400, "temperature": 0.3},
-            timeout=30,
-        )
-        if r.status_code == 429:
-            print("⚠️ Groq ліміт")
-            return None
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"❌ Groq: {e}")
-        return None
-
-def post_to_telegram(text):
+    # Спробуємо спочатку як URL
     r = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": CHANNEL_ID, "text": text,
-              "parse_mode": "Markdown", "disable_web_page_preview": True}
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+        json={
+            "chat_id":    CHANNEL_ID,
+            "photo":      image_url,
+            "caption":    caption,
+            "parse_mode": "Markdown",
+        }
     )
+
     if r.status_code == 200:
         print("✅ Статистику опубліковано")
-    else:
-        print(f"❌ Telegram: {r.text}")
+        return True
+
+    # Якщо не вийшло — завантажуємо і надсилаємо як файл
+    print(f"⚠️ Пробуємо завантажити файл...")
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        img_data = requests.get(image_url, headers=headers, timeout=15).content
+        r2 = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            data={"chat_id": CHANNEL_ID, "caption": caption, "parse_mode": "Markdown"},
+            files={"photo": ("stats.webp", img_data, "image/webp")}
+        )
+        if r2.status_code == 200:
+            print("✅ Статистику опубліковано (файл)")
+            return True
+        print(f"❌ Telegram: {r2.text}")
+    except Exception as e:
+        print(f"❌ Помилка завантаження: {e}")
+    return False
 
 def main():
-    print("📊 Збираємо зведення...")
-    item = fetch_stats()
-    if not item:
-        print("⚠️ Зведення не знайдено")
+    print("📊 Збираємо картинку втрат...")
+    image_url = fetch_losses_image()
+
+    if not image_url:
+        print("⚠️ Картинку не знайдено")
         return
-    text = format_stats(item)
-    if text:
-        post_to_telegram(text)
+
+    print(f"✅ Знайдено: {image_url[:80]}...")
+    post_image_to_telegram(image_url)
 
 if __name__ == "__main__":
     main()
