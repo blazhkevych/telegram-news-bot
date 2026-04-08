@@ -268,6 +268,9 @@ def main():
         if get_topic_count(conn, item["keywords"]) < 2:
             print(f"⏳ Чекаємо: {item['title'][:50]}")
             continue
+        if not is_relevant(item["title"], item["summary"]):
+            print(f"⏭ Нерелевантна: {item['title'][:50]}")
+            continue
 
         print(f"📝 {item['title'][:60]}...")
         post_text = rewrite_with_ai(item)
@@ -275,9 +278,9 @@ def main():
             continue
         if post_text == "RATE_LIMIT":
             print("🛑 Зупиняємо — ліміт Groq. Наступний запуск через годину.")
-            break    
+            break
         if post_text.strip().upper() == "SKIP":
-            print(f"⏭ Нерелевантна: {item['title'][:50]}")
+            print(f"⏭ AI пропустив: {item['title'][:50]}")
             continue
 
         if post_to_telegram(post_text, item["url"], item.get("image_url")):
