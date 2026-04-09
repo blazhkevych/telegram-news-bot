@@ -9,23 +9,42 @@ CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
 def fetch_losses_image():
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get("https://www.zsu.gov.ua/oriientovni-vtraty-protyvnyka",
-                        headers=headers, timeout=15)
-        
-        # Шукаємо S3 URL в HTML напряму через regex
-        matches = re.findall(
-            r's3-bucket\.mil\.gov\.ua[^"\'&]+kill-statistic[^"\'&]+\.webp',
-            r.text
+        r = requests.get(
+            "https://www.zsu.gov.ua/oriientovni-vtraty-protyvnyka",
+            headers=headers, timeout=15
         )
-        
-        if matches:
-            # Декодуємо URL якщо є %2F тощо
-            from urllib.parse import unquote
-            url = unquote(matches[0])
-            full_url = f"https://{url}"
-            print(f"✅ Знайдено: {full_url[:80]}...")
-            return full_url
-            
+
+        # Next.js зберігає дані в __NEXT_DATA__ JSON в HTML
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.DOTALL)
+        if match:
+            import json
+            data = json.loads(match.group(1))
+            # Конвертуємо в рядок і шукаємо kill-statistic
+            data_str = json.dumps(data)
+            urls = re.findall(r'(https://s3-bucket\.mil\.gov\.ua[^"]+kill-statistic[^"]+\.webp)', data_str)
+            if urls:
+                print(f"✅ Знайдено в NEXT_DATA: {urls[0][:80]}")
+                return urls[0]
+
+        # Запасний варіант — шукаємо напряму в HTML
+        urls = re.findall(r'(https://s3-bucket\.mil\.gov\.ua[^"\'\\]+kill-statistic[^"\'\\]+\.webp)', r.text)
+        if urls:
+            print(f"✅ Знайдено в HTML: {urls[0][:80]}")
+            return urls[0]
+
+        # Шукаємо encoded URL
+        from urllib.parse import unquote
+        encoded = re.findall(r's3-bucket\.mil\.gov\.ua%2F[^"\'&]+kill-statistic[^"\'&]+\.webp', r.text)
+        if encoded:
+            url = "https://" + unquote(encoded[0])
+            print(f"✅ Знайдено encoded: {url[:80]}")
+            return url
+
+        print("🔍 Дебаг: шукаємо будь-що з mil.gov.ua...")
+        mil_urls = re.findall(r's3-bucket\.mil\.gov\.ua[^"\'&\s]+', r.text)
+        for u in mil_urls[:3]:
+            print(f"   → {u[:100]}")
+
     except Exception as e:
         print(f"⚠️ Помилка: {e}")
     return None
