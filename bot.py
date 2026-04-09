@@ -159,6 +159,8 @@ def fetch_news(conn):
         except Exception as e:
             print(f"⚠️ {feed_cfg['url']}: {e}")
     items.sort(key=lambda x: get_topic_count(conn, x["keywords"]), reverse=True)
+    # Обмежуємо кількість кандидатів для Groq
+    items = items[:8]
     return items
 
 def is_relevant(title, summary):
