@@ -7,35 +7,27 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
 
 def fetch_losses_image():
-    """Парсить сторінку ЗСУ і отримує актуальне посилання на картинку втрат."""
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         r = requests.get("https://www.zsu.gov.ua/oriientovni-vtraty-protyvnyka",
                         headers=headers, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        # Шукаємо картинку з kill-statistic в URL
-        for img in soup.find_all("img"):
-            src = img.get("src", "") or img.get("data-src", "")
-            if "kill-statistic" in src or "statistic" in src.lower():
-                # Якщо відносний URL — додаємо домен
-                if src.startswith("/"):
-                    src = "https://www.zsu.gov.ua" + src
-                return src
-
-        # Шукаємо в Next.js image тегах
-        for tag in soup.find_all(True):
-            for attr in ["src", "data-src", "srcset"]:
-                val = tag.get(attr, "")
-                if "kill-statistic" in val:
-                    # Витягуємо URL з Next.js формату
-                    match = re.search(r'url=([^&]+)', val)
-                    if match:
-                        from urllib.parse import unquote
-                        return unquote(match.group(1))
-
+        
+        # Шукаємо S3 URL в HTML напряму через regex
+        matches = re.findall(
+            r's3-bucket\.mil\.gov\.ua[^"\'&]+kill-statistic[^"\'&]+\.webp',
+            r.text
+        )
+        
+        if matches:
+            # Декодуємо URL якщо є %2F тощо
+            from urllib.parse import unquote
+            url = unquote(matches[0])
+            full_url = f"https://{url}"
+            print(f"✅ Знайдено: {full_url[:80]}...")
+            return full_url
+            
     except Exception as e:
-        print(f"⚠️ Помилка парсингу: {e}")
+        print(f"⚠️ Помилка: {e}")
     return None
 
 def post_image_to_telegram(image_url):
