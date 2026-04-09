@@ -142,7 +142,7 @@ def fetch_news(conn):
                     continue
                 if is_spam(title, summary):
                     continue
-                if is_russian(title, summary):
+                if is_russian(title, title):
                     print(f"🚫 Російська: {title[:50]}")
                     continue
                 keywords = extract_keywords(title)
