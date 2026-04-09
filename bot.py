@@ -268,7 +268,7 @@ def main():
             break
         if not item["url"]:
             continue
-        if get_topic_count(conn, item["keywords"]) < 2:
+        if get_topic_count(conn, item["keywords"]) < 1:
             print(f"⏳ Чекаємо: {item['title'][:50]}")
             continue
         if not is_relevant(item["title"], item["summary"]):
