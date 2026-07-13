@@ -77,7 +77,8 @@ LLM_PROVIDERS = [p for p in [
     {"name": "Gemini",
      "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
      "key":  os.environ.get("GEMINI_API_KEY"),
-     "model": "gemini-2.5-flash"},        # резерв; коли полагодимо ключ — чиста укр.
+     "model": "gemini-3.5-flash"},        # gemini-2.5-flash Google закрив для нових
+     # користувачів (404 «no longer available»); 3.5-flash — актуальна GA. БАГ-008.
 ] if p["key"]]
 
 def call_llm(prompt, max_tokens=900, temperature=0.4):
