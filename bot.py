@@ -28,6 +28,8 @@ RSS_FEEDS = [
     {"url": "https://www.sciencedaily.com/rss/all.xml",        "lang": "en"},
     {"url": "https://www.oporaua.org/feed",                    "lang": "uk"},
     {"url": "https://bihus.info/feed",                         "lang": "uk"},
+    {"url": "https://armyinform.com.ua/feed/",                 "lang": "uk"},
+    {"url": "https://militarnyi.com/uk/feed/",                 "lang": "uk"},
 ]
 
 SPAM_KEYWORDS = [
@@ -39,7 +41,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
-MAX_POSTS_PER_RUN = 2   # «живий режим»: запуск часто, по 1–2 пости за раз
+MAX_POSTS_PER_RUN = 3   # «живий режим»: запуск часто, кілька постів за раз
 
 # ── Самодіагностика: підсумок запуску адміну в Telegram ────
 FEEDBACK_TOKEN = os.environ.get("FEEDBACK_BOT_TOKEN")
@@ -198,6 +200,23 @@ def is_valid_image(url):
     except:
         return False
 
+UA_TERMS = [
+    "україн", "зсу", "київ", "харків", "одес", "дніпро", "запор", "львів",
+    "херсон", "миколаїв", "полтав", "суми", "чернігів", "донеч", "донец",
+    "луган", "маріуп", "фронт", "окуп", "зеленськ", "генштаб", "мобіліз",
+    "обстріл", "ракет", "дрон", "шахед", "тривог", "бпла", "удар", "війн",
+    "росі", "путін", "санкц", "нато", "євросоюз", "переговор", "полон",
+    "прем'єр", "кабмін", "верховна рада", "нбу", "гривн",
+]
+
+def ukraine_score(item):
+    """Оцінка «наскільки це про Україну» — щоб такі новини йшли першими."""
+    text  = (item["title"] + " " + item["summary"]).lower()
+    score = sum(1 for t in UA_TERMS if t in text)
+    if item.get("lang") == "uk":
+        score += 1
+    return score
+
 def fetch_news(conn):
     items = []
     for feed_cfg in RSS_FEEDS:
@@ -227,7 +246,9 @@ def fetch_news(conn):
                 })
         except Exception as e:
             print(f"⚠️ {feed_cfg['url']}: {e}")
-    items.sort(key=lambda x: get_topic_count(conn, x["keywords"]), reverse=True)
+    # Спершу — новини про Україну, потім — за «трендовістю» (частота теми)
+    items.sort(key=lambda x: (ukraine_score(x), get_topic_count(conn, x["keywords"])),
+               reverse=True)
     # Обмежуємо кількість кандидатів (щоб частіше набирати до MAX_POSTS_PER_RUN)
     items = items[:12]
     return items
