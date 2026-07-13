@@ -1,142 +1,112 @@
 import os
 import requests
-import re
 import sqlite3
 from datetime import date
-from bs4 import BeautifulSoup
+
+# Втрати противника — стабільний відкритий API (дані Генштабу ЗСУ, з приростом
+# за добу). Раніше вишкрібали картинку з сайту ЗСУ — це ламалось; тепер JSON.
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
-DB_PATH        = "published.db"   # той самий файл, що комітиться воркфлоу
+DB_PATH        = "published.db"
+API_URL        = "https://russianwarship.rip/api/v2/statistics/latest"
+
+# (підпис, ключ у API) — порядок = порядок у пості
+ROWS = [
+    ("👤 Особовий склад",          "personnel_units"),
+    ("🛡 Танки",                   "tanks"),
+    ("🚙 ББМ",                     "armoured_fighting_vehicles"),
+    ("🎯 Артсистеми",              "artillery_systems"),
+    ("🚀 РСЗВ",                    "mlrs"),
+    ("🛰 Засоби ППО",              "aa_warfare_systems"),
+    ("✈️ Літаки",                  "planes"),
+    ("🚁 Гелікоптери",             "helicopters"),
+    ("🛩 БпЛА",                    "uav_systems"),
+    ("🚢 Кораблі/катери",          "warships_cutters"),
+    ("🚀 Крилаті ракети",          "cruise_missiles"),
+    ("🚛 Автотехніка й цистерни",  "vehicles_fuel_tanks"),
+]
 
 
 def _ensure_log():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS war_stats_log (
-            den TEXT PRIMARY KEY, image_url TEXT
-        )
-    """)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS war_stats_log (den TEXT PRIMARY KEY, image_url TEXT)"
+    )
     conn.commit()
     return conn
 
 
-def already_posted(image_url):
-    """True, якщо статистику вже постили сьогодні або цю саму картинку раніше."""
+def already_posted_today():
     conn  = _ensure_log()
     today = date.today().isoformat()
-    if conn.execute("SELECT 1 FROM war_stats_log WHERE den=?", (today,)).fetchone():
-        conn.close()
-        return True
-    if conn.execute("SELECT 1 FROM war_stats_log WHERE image_url=?", (image_url,)).fetchone():
-        conn.close()
-        return True
+    row = conn.execute("SELECT 1 FROM war_stats_log WHERE den=?", (today,)).fetchone()
     conn.close()
-    return False
+    return bool(row)
 
 
-def mark_posted(image_url):
+def mark_posted(tag):
     conn  = _ensure_log()
     today = date.today().isoformat()
-    conn.execute("INSERT OR REPLACE INTO war_stats_log VALUES (?,?)", (today, image_url))
+    conn.execute("INSERT OR REPLACE INTO war_stats_log VALUES (?, ?)", (today, tag))
     conn.commit()
     conn.close()
 
-def fetch_losses_image():
+
+def fmt(n):
+    return f"{n:,}".replace(",", " ")   # 1420690 -> "1 420 690"
+
+
+def build_message(data):
+    s   = data["stats"]
+    inc = data.get("increase", {})
+    day = data.get("day", "")
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(
-            "https://www.zsu.gov.ua/oriientovni-vtraty-protyvnyka",
-            headers=headers, timeout=15
-        )
+        y, m, d = data["date"].split("-")
+        date_fmt = f"{d}.{m}.{y}"
+    except Exception:
+        date_fmt = data.get("date", "")
 
-        # Next.js зберігає дані в __NEXT_DATA__ JSON в HTML
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.DOTALL)
-        if match:
-            import json
-            data = json.loads(match.group(1))
-            # Конвертуємо в рядок і шукаємо kill-statistic
-            data_str = json.dumps(data)
-            urls = re.findall(r'(https://s3-bucket\.mil\.gov\.ua[^"]+kill-statistic[^"]+\.webp)', data_str)
-            if urls:
-                print(f"✅ Знайдено в NEXT_DATA: {urls[0][:80]}")
-                return urls[0]
+    lines = [f"📊 *Орієнтовні втрати противника* — {date_fmt} ({day}-й день)\n"]
+    for label, key in ROWS:
+        val = s.get(key)
+        if val is None:
+            continue
+        plus     = inc.get(key, 0)
+        plus_str = f" (+{fmt(plus)})" if plus else ""
+        lines.append(f"{label}: {fmt(val)}{plus_str}")
+    lines.append("\nДжерело: Генеральний штаб ЗСУ")
+    return "\n".join(lines)
 
-        # Запасний варіант — шукаємо напряму в HTML
-        urls = re.findall(r'(https://s3-bucket\.mil\.gov\.ua[^"\'\\]+kill-statistic[^"\'\\]+\.webp)', r.text)
-        if urls:
-            print(f"✅ Знайдено в HTML: {urls[0][:80]}")
-            return urls[0]
 
-        # Шукаємо encoded URL
-        from urllib.parse import unquote
-        encoded = re.findall(r's3-bucket\.mil\.gov\.ua%2F[^"\'&]+kill-statistic[^"\'&]+\.webp', r.text)
-        if encoded:
-            url = "https://" + unquote(encoded[0])
-            print(f"✅ Знайдено encoded: {url[:80]}")
-            return url
-
-        print("🔍 Дебаг: шукаємо будь-що з mil.gov.ua...")
-        mil_urls = re.findall(r's3-bucket\.mil\.gov\.ua[^"\'&\s]+', r.text)
-        for u in mil_urls[:3]:
-            print(f"   → {u[:100]}")
-
-    except Exception as e:
-        print(f"⚠️ Помилка: {e}")
-    return None
-
-def post_image_to_telegram(image_url):
-    """Публікує картинку в Telegram канал."""
-    caption = "📊 *Орієнтовні втрати противника*\n\nДжерело: Генеральний штаб ЗСУ"
-
-    # Спробуємо спочатку як URL
+def post(text):
     r = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-        json={
-            "chat_id":    CHANNEL_ID,
-            "photo":      image_url,
-            "caption":    caption,
-            "parse_mode": "Markdown",
-        }
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={"chat_id": CHANNEL_ID, "text": text,
+              "parse_mode": "Markdown", "disable_web_page_preview": True},
     )
-
     if r.status_code == 200:
-        print("✅ Статистику опубліковано")
+        print("✅ Статистику втрат опубліковано")
         return True
-
-    # Якщо не вийшло — завантажуємо і надсилаємо як файл
-    print(f"⚠️ Пробуємо завантажити файл...")
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        img_data = requests.get(image_url, headers=headers, timeout=15).content
-        r2 = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-            data={"chat_id": CHANNEL_ID, "caption": caption, "parse_mode": "Markdown"},
-            files={"photo": ("stats.webp", img_data, "image/webp")}
-        )
-        if r2.status_code == 200:
-            print("✅ Статистику опубліковано (файл)")
-            return True
-        print(f"❌ Telegram: {r2.text}")
-    except Exception as e:
-        print(f"❌ Помилка завантаження: {e}")
+    print(f"❌ Telegram: {r.text}")
     return False
 
+
 def main():
-    print("📊 Збираємо картинку втрат...")
-    image_url = fetch_losses_image()
-
-    if not image_url:
-        print("⚠️ Картинку не знайдено")
-        return
-
-    if already_posted(image_url):
+    if already_posted_today():
         print("⏭ Статистику вже опубліковано сьогодні — пропускаємо.")
         return
+    try:
+        r = requests.get(API_URL, timeout=15)
+        r.raise_for_status()
+        data = r.json()["data"]
+    except Exception as e:
+        print(f"⚠️ API втрат недоступний: {e}")
+        return
 
-    print(f"✅ Знайдено: {image_url[:80]}...")
-    if post_image_to_telegram(image_url):
-        mark_posted(image_url)
+    if post(build_message(data)):
+        mark_posted(data.get("date", date.today().isoformat()))
+
 
 if __name__ == "__main__":
     main()
