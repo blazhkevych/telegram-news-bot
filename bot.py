@@ -99,7 +99,15 @@ def call_llm(prompt, max_tokens=900, temperature=0.4):
                 print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
                 STATS["err"][p["name"]] = "ліміт (429)"
                 continue
-            r.raise_for_status()
+            if r.status_code >= 400:
+                # raise_for_status показує лише статус+URL (URL ще й обрізається
+                # логом до 70 симв. → «...generativelanguage.google»). Тіло
+                # відповіді містить справжню причину (модель/ключ/API вимкнено).
+                all_rate_limited = False
+                reason = " ".join((r.text or "").split())
+                print(f"❌ {p['name']}: {r.status_code} — {reason[:300]}")
+                STATS["err"][p["name"]] = f"{r.status_code}: {reason[:120]}"
+                continue
             all_rate_limited = False
             content = r.json()["choices"][0]["message"]["content"].strip()
             if content:
@@ -108,7 +116,7 @@ def call_llm(prompt, max_tokens=900, temperature=0.4):
         except Exception as e:
             all_rate_limited = False
             print(f"❌ {p['name']}: {e}")
-            STATS["err"][p["name"]] = str(e)[:70]
+            STATS["err"][p["name"]] = str(e)[:120]
             continue
     return "RATE_LIMIT" if all_rate_limited else None
 
