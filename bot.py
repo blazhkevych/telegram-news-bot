@@ -48,7 +48,7 @@ LLM_PROVIDERS = [p for p in [
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
-     "model": "llama-3.3-70b"},          # 1 млн токенів/добу, дуже швидко
+     "model": "gpt-oss-120b"},           # 1 млн токенів/добу, Production (див. Limits у кабінеті)
     {"name": "Groq",
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
@@ -206,8 +206,8 @@ def fetch_news(conn):
         except Exception as e:
             print(f"⚠️ {feed_cfg['url']}: {e}")
     items.sort(key=lambda x: get_topic_count(conn, x["keywords"]), reverse=True)
-    # Обмежуємо кількість кандидатів для Groq
-    items = items[:8]
+    # Обмежуємо кількість кандидатів (щоб частіше набирати до MAX_POSTS_PER_RUN)
+    items = items[:12]
     return items
 
 def is_relevant(title, summary):
@@ -261,6 +261,8 @@ def rewrite_with_ai(item):
 - Імена, прізвища, посади й назви залишай точно як у джерелі.
 - НЕ вигадуй стать людини. Якщо з джерела стать невідома — формулюй
   нейтрально (за посадою чи прізвищем), не став дієслова й займенники навмання.
+- НЕ приписуй людям посад, звань чи ролей, яких немає в тексті джерела
+  (напр. не називай когось «головою СБУ» чи «міністром», якщо цього там нема).
 - Не повторюй той самий факт двічі й не «долий води». Якщо інформації мало —
   напиши коротше (1–2 речення), це нормально.
 - Жодних припущень, домислів чи фактів, яких немає в джерелі.

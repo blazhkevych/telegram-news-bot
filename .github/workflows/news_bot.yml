@@ -42,6 +42,7 @@ jobs:
         run: python feedback_bot.py
 
       - name: Run Twitter bot
+        if: false   # ТИМЧАСОВО ВИМКНЕНО: Twitter 401 Unauthorized. Повернемось пізніше.
         env:
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
           TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
