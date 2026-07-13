@@ -33,6 +33,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          FEEDBACK_BOT_TOKEN: ${{ secrets.FEEDBACK_BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
         run: python scheduler.py
 
       - name: Run feedback bot

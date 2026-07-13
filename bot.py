@@ -41,6 +41,23 @@ GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
 MAX_POSTS_PER_RUN = 5
 
+# ── Самодіагностика: підсумок запуску адміну в Telegram ────
+FEEDBACK_TOKEN = os.environ.get("FEEDBACK_BOT_TOKEN")
+ADMIN_ID       = os.environ.get("ADMIN_CHAT_ID")
+STATS = {"ok": {}, "err": {}}   # провайдер -> лічильник успіхів / остання помилка
+
+def notify_admin(text):
+    """Короткий підсумок роботи адміну (якщо задано креди фідбек-бота)."""
+    if not (FEEDBACK_TOKEN and ADMIN_ID):
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{FEEDBACK_TOKEN}/sendMessage",
+            json={"chat_id": ADMIN_ID, "text": text}, timeout=10
+        )
+    except Exception as e:
+        print(f"⚠️ notify_admin: {e}")
+
 # ── Безкоштовні LLM-провайдери (усі OpenAI-сумісні) ────────
 # Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
 # Провайдер без ключа в оточенні автоматично пропускається.
@@ -77,15 +94,18 @@ def call_llm(prompt, max_tokens=900, temperature=0.4):
             )
             if r.status_code == 429:
                 print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
+                STATS["err"][p["name"]] = "ліміт (429)"
                 continue
             r.raise_for_status()
             all_rate_limited = False
             content = r.json()["choices"][0]["message"]["content"].strip()
             if content:
+                STATS["ok"][p["name"]] = STATS["ok"].get(p["name"], 0) + 1
                 return content
         except Exception as e:
             all_rate_limited = False
             print(f"❌ {p['name']}: {e}")
+            STATS["err"][p["name"]] = str(e)[:70]
             continue
     return "RATE_LIMIT" if all_rate_limited else None
 
@@ -334,6 +354,15 @@ def main():
             time.sleep(3)
 
     print(f"\n🏁 Опубліковано {count} постів.")
+
+    # Підсумок адміну
+    summary = f"🤖 Збір новин: опубліковано {count} з {len(news)} кандидатів."
+    if STATS["ok"]:
+        summary += "\n✅ Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items())
+    if STATS["err"]:
+        summary += "\n⚠️ Помилки: " + "; ".join(f"{k}: {v}" for k, v in STATS["err"].items())
+    notify_admin(summary)
+
     conn.close()
 
 if __name__ == "__main__":
