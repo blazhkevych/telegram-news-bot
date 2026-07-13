@@ -41,6 +41,53 @@ GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
 MAX_POSTS_PER_RUN = 5
 
+# ── Безкоштовні LLM-провайдери (усі OpenAI-сумісні) ────────
+# Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
+# Провайдер без ключа в оточенні автоматично пропускається.
+LLM_PROVIDERS = [p for p in [
+    {"name": "Cerebras",
+     "url":  "https://api.cerebras.ai/v1/chat/completions",
+     "key":  os.environ.get("CEREBRAS_API_KEY"),
+     "model": "llama-3.3-70b"},          # 1 млн токенів/добу, дуже швидко
+    {"name": "Groq",
+     "url":  "https://api.groq.com/openai/v1/chat/completions",
+     "key":  os.environ.get("GROQ_API_KEY"),
+     "model": "llama-3.3-70b-versatile"},
+    {"name": "Gemini",
+     "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+     "key":  os.environ.get("GEMINI_API_KEY"),
+     "model": "gemini-2.0-flash"},
+] if p["key"]]
+
+def call_llm(prompt, max_tokens=400, temperature=0.4):
+    """Пробує провайдерів по черзі. Повертає текст, 'RATE_LIMIT' (усі в ліміті)
+    або None (усі впали з іншої причини)."""
+    all_rate_limited = True
+    for p in LLM_PROVIDERS:
+        try:
+            r = requests.post(
+                p["url"],
+                headers={"Authorization": f"Bearer {p['key']}",
+                         "Content-Type": "application/json"},
+                json={"model": p["model"],
+                      "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": max_tokens, "temperature": temperature},
+                timeout=30,
+            )
+            if r.status_code == 429:
+                print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
+                continue
+            r.raise_for_status()
+            all_rate_limited = False
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            if content:
+                return content
+        except Exception as e:
+            all_rate_limited = False
+            print(f"❌ {p['name']}: {e}")
+            continue
+    return "RATE_LIMIT" if all_rate_limited else None
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -224,24 +271,7 @@ def rewrite_with_ai(item):
 
 Напиши лише готовий текст або SKIP."""
 
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "max_tokens": 400, "temperature": 0.4},
-            timeout=30,
-        )
-        if r.status_code == 429:
-            print("⚠️ Groq ліміт вичерпано — завершуємо запуск.")
-            return "RATE_LIMIT"
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"❌ Groq: {e}")
-        return None
+    return call_llm(prompt, max_tokens=400, temperature=0.4)
 
 def post_to_telegram(text, url, image_url=None):
     full_text = f"{text}\n\n🔗 [Читати повністю]({url})"
