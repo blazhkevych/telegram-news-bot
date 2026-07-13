@@ -2,6 +2,7 @@ import os
 import requests
 import sqlite3
 from datetime import datetime, date
+from bot import call_llm   # той самий ланцюг провайдерів (Gemini→Cerebras→Groq)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
@@ -87,26 +88,13 @@ def get_recent_news():
     conn.close()
     return [r[0] for r in rows]
 
-def groq(prompt, max_tokens=400):
-    r = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": "llama-3.1-8b-instant",
-              "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": max_tokens, "temperature": 0.7},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
-
 def morning_digest():
     weather = get_weather()
     titles  = get_recent_news()
     news_text = "\n".join(f"- {t}" for t in titles[:10]) or "Новини ще збираються."
     today_fmt = date.today().strftime("%d.%m.%Y")
 
-    try:
-        intro = groq(f"""Ти редактор українського Telegram-каналу UA News.
+    intro = call_llm(f"""Ти редактор українського Telegram-каналу UA News.
 Склади ранковий дайджест. Починай з "🌅 Доброго ранку!"
 Якщо новин ще немає — напиши 1-2 теплі речення що UA News вже на зв'язку і незабаром поділиться новинами.
 Якщо новини є — коротко (2-3 речення) згадай найважливіші події.
@@ -115,8 +103,8 @@ def morning_digest():
 Новини:
 {news_text}
 
-Напиши лише текст дайджесту без пояснень.""", max_tokens=200)
-    except:
+Напиши лише текст дайджесту без пояснень.""", max_tokens=500)
+    if not intro or intro == "RATE_LIMIT":
         intro = "🌅 Доброго ранку! UA News вже на зв'язку."
 
     return f"{intro}\n\n🌤 Погода на {today_fmt}:\n{weather}"
@@ -125,18 +113,19 @@ def evening_digest():
     titles = get_recent_news()
     news_text = "\n".join(f"- {t}" for t in titles[:15]) or "Новини дня відсутні."
 
-    try:
-        return groq(f"""Ти редактор UA News. Склади вечірній підсумок — топ-5 подій дня.
+    text = call_llm(f"""Ти редактор UA News. Склади вечірній підсумок — топ-5 подій дня.
 Починай з "🌙 Підсумки дня від UA News"
 Формат: нумерований список, кожен пункт 1 речення.
+Пиши ЛИШЕ про події, які є в списку новин нижче. Нічого не додумуй.
 Стиль: чіткий, журналістський. Числа тільки цифрами. БЕЗ хештегів.
 
 Новини:
 {news_text}
 
-Напиши лише текст підсумку.""")
-    except:
+Напиши лише текст підсумку.""", max_tokens=600)
+    if not text or text == "RATE_LIMIT":
         return "🌙 Підсумки дня від UA News незабаром."
+    return text
 
 def post(text):
     r = requests.post(

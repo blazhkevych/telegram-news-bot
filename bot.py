@@ -45,21 +45,22 @@ MAX_POSTS_PER_RUN = 5
 # Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
 # Провайдер без ключа в оточенні автоматично пропускається.
 LLM_PROVIDERS = [p for p in [
-    {"name": "Cerebras",
-     "url":  "https://api.cerebras.ai/v1/chat/completions",
-     "key":  os.environ.get("CEREBRAS_API_KEY"),
-     "model": "gpt-oss-120b"},           # 1 млн токенів/добу, Production (див. Limits у кабінеті)
-    {"name": "Groq",
-     "url":  "https://api.groq.com/openai/v1/chat/completions",
-     "key":  os.environ.get("GROQ_API_KEY"),
-     "model": "llama-3.3-70b-versatile"},
+    # Порядок = пріоритет. Спершу — найякісніша українська, далі — резерв.
     {"name": "Gemini",
      "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
      "key":  os.environ.get("GEMINI_API_KEY"),
-     "model": "gemini-2.0-flash"},
+     "model": "gemini-2.5-flash"},        # чиста, сильна українська, 1500 запитів/добу
+    {"name": "Cerebras",
+     "url":  "https://api.cerebras.ai/v1/chat/completions",
+     "key":  os.environ.get("CEREBRAS_API_KEY"),
+     "model": "gemma-4-31b"},             # 1 млн токенів/добу, швидко, без «міркувань»
+    {"name": "Groq",
+     "url":  "https://api.groq.com/openai/v1/chat/completions",
+     "key":  os.environ.get("GROQ_API_KEY"),
+     "model": "openai/gpt-oss-120b"},     # llama-моделі Groq знято з підтримки 2026-06-17
 ] if p["key"]]
 
-def call_llm(prompt, max_tokens=400, temperature=0.4):
+def call_llm(prompt, max_tokens=900, temperature=0.4):
     """Пробує провайдерів по черзі. Повертає текст, 'RATE_LIMIT' (усі в ліміті)
     або None (усі впали з іншої причини)."""
     all_rate_limited = True
@@ -273,7 +274,7 @@ def rewrite_with_ai(item):
 
 Напиши лише готовий текст або SKIP."""
 
-    return call_llm(prompt, max_tokens=400, temperature=0.4)
+    return call_llm(prompt, max_tokens=900, temperature=0.4)
 
 def post_to_telegram(text, url, image_url=None):
     full_text = f"{text}\n\n🔗 [Читати повністю]({url})"
@@ -312,9 +313,9 @@ def main():
         if get_topic_count(conn, item["keywords"]) < 1:
             print(f"⏳ Чекаємо: {item['title'][:50]}")
             continue
-        if not is_relevant(item["title"], item["summary"]):
-            print(f"⏭ Нерелевантна: {item['title'][:50]}")
-            continue
+        # Релевантність тепер вирішує сама модель (у промпті — SKIP для
+        # нецікавого): жорсткий локальний фільтр більше не ріже новини
+        # (напр. науку/здоров'я англійською, яку він не розпізнавав).
 
         print(f"📝 {item['title'][:60]}...")
         post_text = rewrite_with_ai(item)
