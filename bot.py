@@ -5,7 +5,7 @@ import feedparser
 import requests
 import time
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 RSS_FEEDS = [
     {"url": "https://www.ukrinform.ua/rss/block-lastnews",     "lang": "uk"},
@@ -209,6 +209,39 @@ UA_TERMS = [
     "прем'єр", "кабмін", "верховна рада", "нбу", "гривн",
 ]
 
+_STOPWORDS = {
+    "який", "яка", "яке", "які", "цей", "про", "для", "від", "над", "під",
+    "при", "або", "але", "так", "тим", "цьому", "після", "через", "між",
+    "його", "вони", "було", "буде", "може", "цього", "щодо", "також", "цим",
+    "тому", "уже", "вже", "ще", "як", "що",
+}
+
+def _title_words(title):
+    # префікс слова (грубий стемінг) — щоб «заклад»/«закладу»/«закладом» збігались
+    words = re.findall(r"[а-яіїєґёa-z0-9']+", (title or "").lower())
+    return {w[:6] for w in words if len(w) >= 4 and w not in _STOPWORDS}
+
+def is_duplicate_title(conn, title, hours=24, threshold=0.5):
+    """True, якщо про цю ж подію вже постили за останні `hours` (схожість
+    заголовків за Жаккаром). Ловить дублі з різних джерел, але не зливає
+    різні події (напр. дві окремі атаки того ж міста)."""
+    new = _title_words(title)
+    if not new:
+        return False
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    rows = conn.execute(
+        "SELECT title FROM published WHERE published_at >= ?", (since,)
+    ).fetchall()
+    for (old_title,) in rows:
+        old = _title_words(old_title)
+        if not old:
+            continue
+        inter = len(new & old)
+        union = len(new | old)
+        if union and inter / union >= threshold:
+            return True
+    return False
+
 def ukraine_score(item):
     """Оцінка «наскільки це про Україну» — щоб такі новини йшли першими."""
     text  = (item["title"] + " " + item["summary"]).lower()
@@ -358,6 +391,10 @@ def main():
         # Релевантність тепер вирішує сама модель (у промпті — SKIP для
         # нецікавого): жорсткий локальний фільтр більше не ріже новини
         # (напр. науку/здоров'я англійською, яку він не розпізнавав).
+
+        if is_duplicate_title(conn, item["title"]):
+            print(f"⏭ Дубль події (вже постили): {item['title'][:50]}")
+            continue
 
         print(f"📝 {item['title'][:60]}...")
         post_text = rewrite_with_ai(item)
