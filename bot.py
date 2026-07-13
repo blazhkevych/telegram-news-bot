@@ -259,11 +259,32 @@ def ukraine_score(item):
         score += 1
     return score
 
+# Браузерний User-Agent: багато видань (UNIAN, Suspilne, DW, LIGA, Mind,
+# Korrespondent) ріжуть дефолтний UA feedparser і віддають порожньо. Тягнемо
+# фід через requests зі «звичайним» UA, а байти вже парсимо feedparser.
+FEED_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def parse_feed(url):
+    """RSS через браузерний UA. Fallback на прямий feedparser, якщо requests впав."""
+    try:
+        r = requests.get(url, headers={"User-Agent": FEED_UA}, timeout=15)
+        if r.status_code == 200 and r.content:
+            d = feedparser.parse(r.content)
+            if d.entries:
+                return d
+        # порожньо або HTTP-помилка — пробуємо напряму (раптом requests блокують, а fp ні)
+    except Exception as e:
+        print(f"⚠️ parse_feed requests {url}: {str(e)[:80]}")
+    return feedparser.parse(url)
+
+
 def fetch_news(conn):
     items = []
     for feed_cfg in RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_cfg["url"])
+            feed = parse_feed(feed_cfg["url"])
             for entry in feed.entries[:5]:
                 title   = entry.get("title", "")
                 summary = entry.get("summary", "")

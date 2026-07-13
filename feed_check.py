@@ -1,14 +1,13 @@
 """Раз на добу перевіряє всі RSS-джерела на «живість» і шле звіт адміну.
 Так ревізія джерел стає автоматичною: бот сам каже, який фід відвалився."""
-import feedparser
-from bot import RSS_FEEDS, notify_admin
+from bot import RSS_FEEDS, notify_admin, parse_feed
 
 
 def main():
     dead = []
     for f in RSS_FEEDS:
         try:
-            d = feedparser.parse(f["url"])
+            d = parse_feed(f["url"])                 # той самий браузерний UA, що й у боті
             if not d.entries:                       # порожньо = не працює
                 dead.append(f["url"])
         except Exception as e:
