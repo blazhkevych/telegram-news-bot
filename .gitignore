@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Секрети / локальні змінні (у нас усе в GitHub Secrets — але про всяк)
+.env
+*.env
+secrets.*
+
+# IDE / ОС
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# УВАГА: published.db, twitter.db, feedback_offset.txt НЕ ігноруємо —
+# бот навмисно комітить їх як стан (історія публікацій, захист від дублів).
