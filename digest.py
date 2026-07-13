@@ -77,6 +77,23 @@ def get_weather():
             lines.append(f"🌤 {city['name']}: дані недоступні")
     return "\n".join(lines)
 
+def get_rates():
+    """Курс НБУ (безкоштовний API, без ключа): долар і євро."""
+    try:
+        r = requests.get(
+            "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json",
+            timeout=10,
+        )
+        data  = r.json()
+        rates = {x["cc"]: x["rate"] for x in data if x["cc"] in ("USD", "EUR")}
+        usd, eur = rates.get("USD"), rates.get("EUR")
+        if usd and eur:
+            return f"💵 Долар: {usd:.2f} грн    💶 Євро: {eur:.2f} грн"
+    except Exception as e:
+        print(f"⚠️ НБУ: {e}")
+    return None
+
+
 def get_recent_news():
     conn = sqlite3.connect(DB_PATH)
     today_str = date.today().isoformat()
@@ -107,7 +124,9 @@ def morning_digest():
     if not intro or intro == "RATE_LIMIT":
         intro = "🌅 Доброго ранку! UA News вже на зв'язку."
 
-    return f"{intro}\n\n🌤 Погода на {today_fmt}:\n{weather}"
+    rates      = get_rates()
+    rates_line = f"\n\n{rates}" if rates else ""
+    return f"{intro}{rates_line}\n\n🌤 Погода на {today_fmt}:\n{weather}"
 
 def evening_digest():
     titles = get_recent_news()

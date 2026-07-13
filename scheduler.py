@@ -58,6 +58,12 @@ if hour >= 6 and not done_today("war_stats"):
     run("war_stats.py")
     mark_today("war_stats")
 
+# 2b) Перевірка RSS на «живість» — раз на добу (від 6:00)
+if hour >= 6 and not done_today("feed_check"):
+    print("🩺 Перевірка RSS...")
+    run("feed_check.py")
+    mark_today("feed_check")
+
 # 3) Ранковий дайджест — раз на добу, перший запуск від 6:00
 if 6 <= hour < 21 and not done_today("morning"):
     print("🌅 Ранковий дайджест...")
