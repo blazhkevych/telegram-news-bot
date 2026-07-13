@@ -1,10 +1,46 @@
 import os
 import requests
 import re
+import sqlite3
+from datetime import date
 from bs4 import BeautifulSoup
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
+DB_PATH        = "published.db"   # той самий файл, що комітиться воркфлоу
+
+
+def _ensure_log():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS war_stats_log (
+            den TEXT PRIMARY KEY, image_url TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def already_posted(image_url):
+    """True, якщо статистику вже постили сьогодні або цю саму картинку раніше."""
+    conn  = _ensure_log()
+    today = date.today().isoformat()
+    if conn.execute("SELECT 1 FROM war_stats_log WHERE den=?", (today,)).fetchone():
+        conn.close()
+        return True
+    if conn.execute("SELECT 1 FROM war_stats_log WHERE image_url=?", (image_url,)).fetchone():
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+
+def mark_posted(image_url):
+    conn  = _ensure_log()
+    today = date.today().isoformat()
+    conn.execute("INSERT OR REPLACE INTO war_stats_log VALUES (?,?)", (today, image_url))
+    conn.commit()
+    conn.close()
 
 def fetch_losses_image():
     try:
@@ -94,8 +130,13 @@ def main():
         print("⚠️ Картинку не знайдено")
         return
 
+    if already_posted(image_url):
+        print("⏭ Статистику вже опубліковано сьогодні — пропускаємо.")
+        return
+
     print(f"✅ Знайдено: {image_url[:80]}...")
-    post_image_to_telegram(image_url)
+    if post_image_to_telegram(image_url):
+        mark_posted(image_url)
 
 if __name__ == "__main__":
     main()
