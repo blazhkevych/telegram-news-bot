@@ -39,7 +39,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
-MAX_POSTS_PER_RUN = 5
+MAX_POSTS_PER_RUN = 2   # «живий режим»: запуск часто, по 1–2 пости за раз
 
 # ── Самодіагностика: підсумок запуску адміну в Telegram ────
 FEEDBACK_TOKEN = os.environ.get("FEEDBACK_BOT_TOKEN")
@@ -62,11 +62,8 @@ def notify_admin(text):
 # Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
 # Провайдер без ключа в оточенні автоматично пропускається.
 LLM_PROVIDERS = [p for p in [
-    # Порядок = пріоритет. Спершу — найякісніша українська, далі — резерв.
-    {"name": "Gemini",
-     "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-     "key":  os.environ.get("GEMINI_API_KEY"),
-     "model": "gemini-2.5-flash"},        # чиста, сильна українська, 1500 запитів/добу
+    # Порядок = пріоритет. Перевірені робочі — першими; Gemini поки останній
+    # (дає 404 — треба перевірити ключ AI Studio / вмикання Generative Language API).
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
@@ -75,6 +72,10 @@ LLM_PROVIDERS = [p for p in [
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
      "model": "openai/gpt-oss-120b"},     # llama-моделі Groq знято з підтримки 2026-06-17
+    {"name": "Gemini",
+     "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+     "key":  os.environ.get("GEMINI_API_KEY"),
+     "model": "gemini-2.5-flash"},        # резерв; коли полагодимо ключ — чиста укр.
 ] if p["key"]]
 
 def call_llm(prompt, max_tokens=900, temperature=0.4):
@@ -355,13 +356,14 @@ def main():
 
     print(f"\n🏁 Опубліковано {count} постів.")
 
-    # Підсумок адміну
-    summary = f"🤖 Збір новин: опубліковано {count} з {len(news)} кандидатів."
-    if STATS["ok"]:
-        summary += "\n✅ Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items())
-    if STATS["err"]:
-        summary += "\n⚠️ Помилки: " + "; ".join(f"{k}: {v}" for k, v in STATS["err"].items())
-    notify_admin(summary)
+    # Підсумок адміну — лише коли є що сказати (щоб не спамити при частих запусках)
+    if count > 0 or STATS["err"]:
+        summary = f"🤖 Збір новин: опубліковано {count} з {len(news)} кандидатів."
+        if STATS["ok"]:
+            summary += "\n✅ Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items())
+        if STATS["err"]:
+            summary += "\n⚠️ Помилки: " + "; ".join(f"{k}: {v}" for k, v in STATS["err"].items())
+        notify_admin(summary)
 
     conn.close()
 

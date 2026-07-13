@@ -1,27 +1,71 @@
+import os
+import sqlite3
 import subprocess
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 
-KYIV = pytz.timezone("Europe/Kiev")
-now  = datetime.now(KYIV)
-hour = now.hour
+# «Живий режим»: воркфлоу запускається часто (кожні ~15 хв), тож:
+#   • новини — щоразу (bot.py сам постить по кілька свіжих і не дублює);
+#   • дайджести й статистика втрат — РАЗ НА ДОБУ (захист від повторів нижче).
+
+KYIV    = pytz.timezone("Europe/Kiev")
+now     = datetime.now(KYIV)
+hour    = now.hour
+DB_PATH = "published.db"
+
+
+def _conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS daily_log (den TEXT, kind TEXT, PRIMARY KEY(den, kind))"
+    )
+    conn.commit()
+    return conn
+
+
+def done_today(kind):
+    conn = _conn()
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT 1 FROM daily_log WHERE den=? AND kind=?", (today, kind)
+    ).fetchone()
+    conn.close()
+    return bool(row)
+
+
+def mark_today(kind):
+    conn = _conn()
+    today = date.today().isoformat()
+    conn.execute("INSERT OR IGNORE INTO daily_log VALUES (?, ?)", (today, kind))
+    conn.commit()
+    conn.close()
+
+
+def run(script, extra_env=None):
+    env = {**os.environ, **(extra_env or {})}
+    subprocess.run(["python", script], env=env)
+
 
 print(f"🕐 Київський час: {now.strftime('%H:%M')} ({now.strftime('%Z')})")
 
-if hour == 6:
-    print("🌅 Запускаємо ранковий дайджест...")
-    subprocess.run(["python", "digest.py"], env={**__import__('os').environ, "DIGEST_TYPE": "morning"})
-    print("📊 Запускаємо статистику втрат...")
-    subprocess.run(["python", "war_stats.py"])
+# 1) Новини — щоразу
+print("📰 Збір новин...")
+run("bot.py")
 
-elif hour == 21:
-    print("🌙 Запускаємо вечірній підсумок...")
-    subprocess.run(["python", "digest.py"], env={**__import__('os').environ, "DIGEST_TYPE": "evening"})
+# 2) Статистика втрат — одна спроба на добу (від 6:00)
+if hour >= 6 and not done_today("war_stats"):
+    print("📊 Статистика втрат...")
+    run("war_stats.py")
+    mark_today("war_stats")
 
-elif 6 <= hour <= 23 and hour not in (6, 21):
-    print("📰 Запускаємо збір новин...")
-    subprocess.run(["python", "bot.py"])
-    subprocess.run(["python", "war_stats.py"])
+# 3) Ранковий дайджест — раз на добу, перший запуск від 6:00
+if 6 <= hour < 21 and not done_today("morning"):
+    print("🌅 Ранковий дайджест...")
+    run("digest.py", {"DIGEST_TYPE": "morning"})
+    mark_today("morning")
 
-else:
-    print(f"😴 Година {hour}:00 — нічого не запускаємо.")
+# 4) Вечірній підсумок — раз на добу, від 21:00
+if hour >= 21 and not done_today("evening"):
+    print("🌙 Вечірній підсумок...")
+    run("digest.py", {"DIGEST_TYPE": "evening"})
+    mark_today("evening")

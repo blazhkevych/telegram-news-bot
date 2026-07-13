@@ -2,11 +2,16 @@ name: News Bot
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '*/15 * * * *'   # «живий режим»: кожні ~15 хв (GitHub може запізнюватись)
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# Не запускати два прогони одночасно (щоб не було конфліктів git push)
+concurrency:
+  group: news-bot
+  cancel-in-progress: false
 
 jobs:
   post-news:
