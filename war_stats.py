@@ -95,18 +95,21 @@ def post(text):
 def main():
     if already_posted_today():
         print("⏭ Статистику вже опубліковано сьогодні — пропускаємо.")
-        return
+        return True
     try:
         r = requests.get(API_URL, timeout=15)
         r.raise_for_status()
         data = r.json()["data"]
     except Exception as e:
         print(f"⚠️ API втрат недоступний: {e}")
-        return
+        return False
 
     if post(build_message(data)):
         mark_posted(data.get("date", date.today().isoformat()))
+        return True
+    return False
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(0 if main() else 1)

@@ -215,7 +215,16 @@ def extract_image(entry):
 def is_valid_image(url):
     try:
         r = requests.head(url, timeout=5, allow_redirects=True)
-        return r.status_code == 200 and "image" in r.headers.get("content-type", "")
+        if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
+            return True
+        if r.status_code in (403, 405):
+            # деякі CDN (Cloudflare тощо) блокують HEAD, хоча GET віддає
+            # картинку нормально — не завантажуємо тіло, лише заголовки.
+            r = requests.get(url, timeout=5, allow_redirects=True, stream=True)
+            ok = r.status_code == 200 and "image" in r.headers.get("content-type", "")
+            r.close()
+            return ok
+        return False
     except:
         return False
 
@@ -303,7 +312,7 @@ def fetch_news(conn):
                     continue
                 if is_spam(title, summary):
                     continue
-                if is_russian(title, title):
+                if is_russian(title, summary):
                     print(f"🚫 Російська: {title[:50]}")
                     continue
                 keywords = extract_keywords(title)
@@ -425,9 +434,6 @@ def main():
             break
         if not item["url"]:
             continue
-        if get_topic_count(conn, item["keywords"]) < 1:
-            print(f"⏳ Чекаємо: {item['title'][:50]}")
-            continue
         # Релевантність тепер вирішує сама модель (у промпті — SKIP для
         # нецікавого): жорсткий локальний фільтр більше не ріже новини
         # (напр. науку/здоров'я англійською, яку він не розпізнавав).
@@ -456,4 +462,14 @@ def main():
 
     # Підсумок адміну — лише коли є що сказати (щоб не спамити при частих запусках)
     if count > 0 or STATS["err"]:
-        summ
+        summary = f"🤖 Збір новин: опубліковано {count} з {len(news)} кандидатів."
+        if STATS["ok"]:
+            summary += "\n✅ Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items())
+        if STATS["err"]:
+            summary += "\n⚠️ Помилки: " + "; ".join(f"{k}: {v}" for k, v in STATS["err"].items())
+        notify_admin(summary)
+
+    conn.close()
+
+if __name__ == "__main__":
+    main()

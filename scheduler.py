@@ -42,8 +42,9 @@ def mark_today(kind):
 
 
 def run(script, extra_env=None):
+    """Повертає True, якщо скрипт завершився успішно (код 0)."""
     env = {**os.environ, **(extra_env or {})}
-    subprocess.run(["python", script], env=env)
+    return subprocess.run(["python", script], env=env).returncode == 0
 
 
 print(f"🕐 Київський час: {now.strftime('%H:%M')} ({now.strftime('%Z')})")
@@ -55,23 +56,23 @@ run("bot.py")
 # 2) Статистика втрат — одна спроба на добу (від 6:00)
 if hour >= 6 and not done_today("war_stats"):
     print("📊 Статистика втрат...")
-    run("war_stats.py")
-    mark_today("war_stats")
+    if run("war_stats.py"):
+        mark_today("war_stats")
 
 # 2b) Перевірка RSS на «живість» — раз на добу (від 6:00)
 if hour >= 6 and not done_today("feed_check"):
     print("🩺 Перевірка RSS...")
-    run("feed_check.py")
-    mark_today("feed_check")
+    if run("feed_check.py"):
+        mark_today("feed_check")
 
 # 3) Ранковий дайджест — раз на добу, перший запуск від 6:00
 if 6 <= hour < 21 and not done_today("morning"):
     print("🌅 Ранковий дайджест...")
-    run("digest.py", {"DIGEST_TYPE": "morning"})
-    mark_today("morning")
+    if run("digest.py", {"DIGEST_TYPE": "morning"}):
+        mark_today("morning")
 
 # 4) Вечірній підсумок — раз на добу, від 21:00
 if hour >= 21 and not done_today("evening"):
     print("🌙 Вечірній підсумок...")
-    run("digest.py", {"DIGEST_TYPE": "evening"})
-    mark_today("evening")
+    if run("digest.py", {"DIGEST_TYPE": "evening"}):
+        mark_today("evening")

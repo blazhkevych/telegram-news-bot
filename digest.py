@@ -154,16 +154,19 @@ def post(text):
     )
     if r.status_code == 200:
         print(f"✅ Дайджест опубліковано ({DIGEST_TYPE})")
-    else:
-        print(f"❌ {r.text}")
+        return True
+    print(f"❌ {r.text}")
+    return False
 
 def main():
     if DIGEST_TYPE == "morning":
         print("🌅 Ранковий дайджест...")
-        post(morning_digest())
+        ok = post(morning_digest())
     else:
         print("🌙 Вечірній підсумок...")
-        post(evening_digest())
+        ok = post(evening_digest())
+    return ok
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(0 if main() else 1)

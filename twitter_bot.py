@@ -24,6 +24,25 @@ RSS_FEEDS = [
     {"url": "https://feeds.bbci.co.uk/news/world/rss.xml","lang": "en"},
 ]
 
+# Браузерний User-Agent: багато видань ріжуть дефолтний UA feedparser і
+# віддають порожньо (див. bot.py FEED_UA / БАГ-009). Дубльовано тут навмисно —
+# twitter_bot.py не імпортує bot.py, бо той на імпорті вимагає TELEGRAM_*
+# змінні оточення, яких немає в кроці Twitter-воркфлоу.
+FEED_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def parse_feed(url):
+    try:
+        r = requests.get(url, headers={"User-Agent": FEED_UA}, timeout=15)
+        if r.status_code == 200 and r.content:
+            d = feedparser.parse(r.content)
+            if d.entries:
+                return d
+    except Exception as e:
+        print(f"⚠️ parse_feed requests {url}: {str(e)[:80]}")
+    return feedparser.parse(url)
+
 # ── База даних ─────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -82,7 +101,7 @@ def fetch_news(conn) -> list[dict]:
     items = []
     for feed_cfg in RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_cfg["url"])
+            feed = parse_feed(feed_cfg["url"])
             for entry in feed.entries[:5]:
                 url = entry.get("link", "")
                 if not url or is_published(conn, url):
