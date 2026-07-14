@@ -18,6 +18,8 @@ RSS_FEEDS = [
     {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk"},
     {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk"},
     {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk"},
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # Радіо Свобода (через Google News)
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # DW українською (через Google News)
     {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",        "lang": "uk"},
     {"url": "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # агрегатор
     # --- Українські (розслідування / армія) ---
@@ -29,6 +31,9 @@ RSS_FEEDS = [
     {"url": "https://www.theguardian.com/world/rss",             "lang": "en"},
     {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en"},
     {"url": "https://www.euronews.com/rss",                      "lang": "en"},
+    {"url": "http://rss.cnn.com/rss/edition_world.rss",            "lang": "en"},  # CNN World
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en", "lang": "en"},  # Reuters (через Google News)
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en", "lang": "en"},  # AP (через Google News)
     # --- Технології / наука ---
     {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk"},
     {"url": "https://techcrunch.com/feed/",                      "lang": "en"},
@@ -451,14 +456,4 @@ def main():
 
     # Підсумок адміну — лише коли є що сказати (щоб не спамити при частих запусках)
     if count > 0 or STATS["err"]:
-        summary = f"🤖 Збір новин: опубліковано {count} з {len(news)} кандидатів."
-        if STATS["ok"]:
-            summary += "\n✅ Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items())
-        if STATS["err"]:
-            summary += "\n⚠️ Помилки: " + "; ".join(f"{k}: {v}" for k, v in STATS["err"].items())
-        notify_admin(summary)
-
-    conn.close()
-
-if __name__ == "__main__":
-    main()
+        summ
