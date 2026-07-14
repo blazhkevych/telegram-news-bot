@@ -12,8 +12,9 @@ TWITTER_ACCESS_TOKEN  = os.environ["TWITTER_ACCESS_TOKEN"]
 TWITTER_ACCESS_SECRET = os.environ["TWITTER_ACCESS_SECRET"]
 GROQ_API_KEY          = os.environ["GROQ_API_KEY"]
 
-MONTHLY_LIMIT = 500
-DB_PATH       = "twitter.db"
+MONTHLY_LIMIT     = 500   # free-tier X: 500 постів/місяць на запис
+MAX_TWEETS_PER_RUN = 1    # струмочок: не залп за один прогін, а по 1 за раз
+DB_PATH           = "twitter.db"
 
 RSS_FEEDS = [
     {"url": "https://www.ukrinform.ua/rss/block-lastnews", "lang": "uk"},
@@ -78,6 +79,16 @@ def posts_this_month(conn) -> int:
     row = conn.execute(
         "SELECT COUNT(*) FROM twitter_posts WHERE year_month=?",
         (year_month,)
+    ).fetchone()
+    return row[0] if row else 0
+
+def posts_today(conn) -> int:
+    """Скільки твітів уже опубліковано СЬОГОДНІ (щоб денний бюджет не
+    витрачався одним залпом за перший прогін)."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    row = conn.execute(
+        "SELECT COUNT(*) FROM twitter_posts WHERE published_at LIKE ?",
+        (today + "%",)
     ).fetchone()
     return row[0] if row else 0
 
@@ -188,18 +199,22 @@ def post_tweet(text: str, url: str) -> bool:
 # ── Головна функція ────────────────────────────────────────
 def main():
     conn    = init_db()
-    allowed = posts_allowed_today(conn)
+    daily   = posts_allowed_today(conn)   # денна квота з місячного розподілу
+    already = posts_today(conn)           # уже опубліковано сьогодні
     used    = posts_this_month(conn)
     today   = date.today()
     days_in_month  = calendar.monthrange(today.year, today.month)[1]
     days_remaining = days_in_month - today.day + 1
 
+    # За прогін — не більше MAX_TWEETS_PER_RUN і не більше денного залишку.
+    allowed = max(0, min(MAX_TWEETS_PER_RUN, daily - already))
+
     print(f"📊 Місяць: використано {used}/{MONTHLY_LIMIT} постів")
-    print(f"📅 Залишилось днів: {days_remaining}")
-    print(f"📝 Сьогодні можна опублікувати: {allowed}")
+    print(f"📅 Залишилось днів: {days_remaining}; денна квота {daily}, сьогодні вже {already}")
+    print(f"📝 Цей прогін може опублікувати: {allowed}")
 
     if allowed == 0:
-        print("⛔ Місячний ліміт вичерпано.")
+        print("⛔ Ліміт на зараз вичерпано (місячний або денний).")
         conn.close()
         return
 
