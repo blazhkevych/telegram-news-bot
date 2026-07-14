@@ -13,25 +13,14 @@ from bot import RSS_FEEDS, notify_admin, FEED_UA
 
 # Кандидати: виправлені адреси мертвих + нові поважні видання + Google News.
 CANDIDATES = [
-    # --- виправлення мертвих ---
-    "https://rss.unian.net/site/news_ukr.rss",          # УНІАН (правильна адреса)
-    "https://suspilne.media/rss/all.rss",               # Suspilne (спроба)
-    "https://www.liga.net/news/all/rss.xml",            # LIGA (без biz-піддомену)
-    "https://ua.korrespondent.net/rss/",                # Корреспондент (спроба)
-    # --- нові поважні українські ---
-    "https://hromadske.ua/feed",                        # Громадське
-    "https://censor.net/ua/includes/news_uk.xml",       # Цензор.НЕТ
-    "https://lb.ua/rss/ukr/news.xml",                   # LB.ua
-    "https://zn.ua/ukr/rss/",                           # Дзеркало тижня
-    "https://www.eurointegration.com.ua/rss/",          # Європейська правда
-    "https://www.epravda.com.ua/rss/",                  # Економічна правда
-    "https://glavcom.ua/rss/rss.xml",                   # Главком
-    # --- надійний агрегатор ---
-    "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk",  # Google News Україна (топ)
-    # --- світові ---
-    "https://www.aljazeera.com/xml/rss/all.xml",        # Al Jazeera
-    "https://www.theguardian.com/world/rss",            # The Guardian
-    "https://www.euronews.com/rss",                     # Euronews
+    # Радіо Свобода — пряма RSS протухла, беремо через Google News (site-фільтр)
+    "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk",
+    # DW українською — теж через Google News
+    "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk",
+    # ще світові
+    "http://rss.cnn.com/rss/edition_world.rss",                                                  # CNN World
+    "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en",   # Reuters
+    "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en",    # AP
 ]
 
 
@@ -67,8 +56,3 @@ def main():
 
     cand = ["🧪 КАНДИДАТИ (нові/виправлені на перевірку):"]
     cand += [f"{diag_one(u)} — {u}" for u in CANDIDATES]
-    _send("\n".join(cand))
-
-
-if __name__ == "__main__":
-    main()

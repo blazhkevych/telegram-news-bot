@@ -8,28 +8,33 @@ import re
 from datetime import datetime, timedelta
 
 RSS_FEEDS = [
-    {"url": "https://www.ukrinform.ua/rss/block-lastnews",     "lang": "uk"},
-    {"url": "https://www.pravda.com.ua/rss/view_news/",        "lang": "uk"},
-    {"url": "https://suspilne.media/rss/news.xml",             "lang": "uk"},
-    {"url": "https://www.radiosvoboda.org/api/zrqiteoiqp",     "lang": "uk"},
-    {"url": "https://tsn.ua/rss/full.rss",                     "lang": "uk"},
-    {"url": "https://www.unian.ua/rss/news.rss",               "lang": "uk"},
-    {"url": "https://ua.korrespondent.net/rss/all.rss",        "lang": "uk"},
-    {"url": "https://nv.ua/ukr/rss/all.xml",                   "lang": "uk"},
-    {"url": "https://dou.ua/lenta/feed/",                      "lang": "uk"},
-    {"url": "https://techcrunch.com/feed/",                    "lang": "en"},
-    {"url": "https://www.theverge.com/rss/index.xml",          "lang": "en"},
-    {"url": "https://feeds.arstechnica.com/arstechnica/index", "lang": "en"},
-    {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",      "lang": "uk"},
-    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",     "lang": "en"},
-    {"url": "https://rss.dw.com/xml/rss-uk-ukr",               "lang": "uk"},
-    {"url": "https://mind.ua/rss.xml",                         "lang": "uk"},
-    {"url": "https://biz.liga.net/ukr/all/rss.xml",            "lang": "uk"},
-    {"url": "https://www.sciencedaily.com/rss/all.xml",        "lang": "en"},
-    {"url": "https://www.oporaua.org/feed",                    "lang": "uk"},
-    {"url": "https://bihus.info/feed",                         "lang": "uk"},
-    {"url": "https://armyinform.com.ua/feed/",                 "lang": "uk"},
-    {"url": "https://militarnyi.com/uk/feed/",                 "lang": "uk"},
+    # --- Українські (загальні) ---
+    {"url": "https://www.ukrinform.ua/rss/block-lastnews",       "lang": "uk"},
+    {"url": "https://www.pravda.com.ua/rss/view_news/",          "lang": "uk"},
+    {"url": "https://suspilne.media/rss/all.rss",                "lang": "uk"},
+    {"url": "https://tsn.ua/rss/full.rss",                       "lang": "uk"},
+    {"url": "https://rss.unian.net/site/news_ukr.rss",           "lang": "uk"},
+    {"url": "https://nv.ua/ukr/rss/all.xml",                     "lang": "uk"},
+    {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk"},
+    {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk"},
+    {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk"},
+    {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",        "lang": "uk"},
+    {"url": "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # агрегатор
+    # --- Українські (розслідування / армія) ---
+    {"url": "https://bihus.info/feed",                           "lang": "uk"},
+    {"url": "https://armyinform.com.ua/feed/",                   "lang": "uk"},
+    {"url": "https://militarnyi.com/uk/feed/",                   "lang": "uk"},
+    # --- Світові (загальні) ---
+    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",       "lang": "en"},
+    {"url": "https://www.theguardian.com/world/rss",             "lang": "en"},
+    {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en"},
+    {"url": "https://www.euronews.com/rss",                      "lang": "en"},
+    # --- Технології / наука ---
+    {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk"},
+    {"url": "https://techcrunch.com/feed/",                      "lang": "en"},
+    {"url": "https://www.theverge.com/rss/index.xml",            "lang": "en"},
+    {"url": "https://feeds.arstechnica.com/arstechnica/index",   "lang": "en"},
+    {"url": "https://www.sciencedaily.com/rss/all.xml",          "lang": "en"},
 ]
 
 SPAM_KEYWORDS = [
