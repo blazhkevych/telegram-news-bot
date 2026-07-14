@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import hashlib
+import html
 import feedparser
 import requests
 import time
@@ -380,12 +381,18 @@ def rewrite_with_ai(item):
 
 Якщо важлива — напиши у стилі якісної журналістики:
 - Мова: виключно українська
-- Перший рядок: найголовніший факт (хто, що, де, коли)
-- Далі: контекст і значення події для читача
-- Довжина: 3–4 речення, не більше (якщо інформації мало — 1–2 речення, це нормально)
+- ФОРМАТ (важливо, стиль каналу):
+  • Перший рядок — короткий заголовок-суть (хто/що/де), почни його ОДНИМ
+    доречним емодзі (🚀 космос, ⚡️ терміново, 📚 культура, 💥 вибух, 🕊 мир
+    тощо). Без крапки в кінці заголовка.
+  • Далі — порожній рядок, потім 2–3 КОРОТКІ абзаци (1–2 речення кожен),
+    розділені порожнім рядком. Так пост легко читати.
+  • НЕ став сам жирний/курсив чи будь-яку розмітку (*, _, #) — пиши чистий
+    текст; форматування додасть система.
 - Стиль: точний, нейтральний, без сенсаційності та канцеляризмів
 - Числа і дати: лише цифрами (5 квітня, 3 млрд, 47%)
 - Якщо незнайоме слово — опиши зміст, не залишай англійського
+- Якщо інформації мало — 1–2 речення, це нормально
 - БЕЗ хештегів, БЕЗ "Джерело:", БЕЗ вигаданих фактів
 
 ТОЧНІСТЬ (найважливіше — від цього залежить довіра до каналу):
@@ -410,21 +417,37 @@ def rewrite_with_ai(item):
     # Для фактичного переказу різноманіття не потрібне, точність важливіша.
     return call_llm(prompt, max_tokens=900, temperature=0.2)
 
+def format_post_html(text, url):
+    """Стиль NV для parse_mode=HTML: перший (непорожній) рядок — жирний
+    заголовок, решта абзаців — як є. Екрануємо <, >, & у ВСЬОМУ тексті
+    новини, щоб сирі символи не ламали HTML-розмітку Telegram (у Markdown
+    таке валило публікацію на символах _ * [ )."""
+    lines = text.strip().split("\n")
+    head_idx = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    parts = []
+    for i, ln in enumerate(lines):
+        esc = html.escape(ln)
+        parts.append(f"<b>{esc}</b>" if i == head_idx else esc)
+    body = "\n".join(parts).strip()
+    link = f'<a href="{html.escape(url, quote=True)}">🔗 Читати повністю</a>'
+    return f"{body}\n\n{link}"
+
+
 def post_to_telegram(text, url, image_url=None):
-    full_text = f"{text}\n\n🔗 [Читати повністю]({url})"
+    full_text   = format_post_html(text, url)
     valid_image = image_url and is_valid_image(image_url)
 
     if valid_image:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
             json={"chat_id": CHANNEL_ID, "photo": image_url,
-                  "caption": full_text, "parse_mode": "Markdown"}
+                  "caption": full_text, "parse_mode": "HTML"}
         )
     else:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": CHANNEL_ID, "text": full_text,
-                  "parse_mode": "Markdown", "disable_web_page_preview": False}
+                  "parse_mode": "HTML", "disable_web_page_preview": False}
         )
 
     if response.status_code == 200:
