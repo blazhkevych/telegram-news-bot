@@ -141,7 +141,7 @@ def evening_digest():
 Новини:
 {news_text}
 
-Напиши лише текст підсумку.""", max_tokens=600)
+Напиши лише текст підсумку.""", max_tokens=600, temperature=0.3)
     if not text or text == "RATE_LIMIT":
         return "🌙 Підсумки дня від UA News незабаром."
     return text
