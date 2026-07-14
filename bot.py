@@ -74,21 +74,25 @@ def notify_admin(text):
 # Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
 # Провайдер без ключа в оточенні автоматично пропускається.
 LLM_PROVIDERS = [p for p in [
-    # Порядок = пріоритет. Перевірені робочі — першими; Gemini поки останній
-    # (дає 404 — треба перевірити ключ AI Studio / вмикання Generative Language API).
-    {"name": "Cerebras",
-     "url":  "https://api.cerebras.ai/v1/chat/completions",
-     "key":  os.environ.get("CEREBRAS_API_KEY"),
-     "model": "gemma-4-31b"},             # 1 млн токенів/добу, швидко, без «міркувань»
+    # Порядок = ЯКІСТЬ (найсильніша модель перша) — це прямо б'є в БАГ-006
+    # (галюцинації/вигадана стать: сильніша модель менше «додумує»).
+    # Ланцюг самобалансується: якщо Groq упреться в добовий ліміт (429) —
+    # автоматично підхоплює Cerebras (щедрий ліміт + швидкість), тобто НЕ гірше
+    # за попередню поведінку. Підсумок адміну (STATS) показує реальний баланс
+    # «Groq×N, Cerebras×M» — за ним видно, чи тримає Groq навантаження.
     {"name": "Groq",
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
-     "model": "openai/gpt-oss-120b"},     # llama-моделі Groq знято з підтримки 2026-06-17
+     "model": "openai/gpt-oss-120b"},     # 120B, найсильніша в ланцюзі; llama знято 2026-06-17
+    {"name": "Cerebras",
+     "url":  "https://api.cerebras.ai/v1/chat/completions",
+     "key":  os.environ.get("CEREBRAS_API_KEY"),
+     "model": "gemma-4-31b"},             # 31B, швидкий резерв: 1 млн токенів/добу
     {"name": "Gemini",
      "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
      "key":  os.environ.get("GEMINI_API_KEY"),
-     "model": "gemini-3.5-flash"},        # gemini-2.5-flash Google закрив для нових
-     # користувачів (404 «no longer available»); 3.5-flash — актуальна GA. БАГ-008.
+     "model": "gemini-3.5-flash"},        # останній резерв; gemini-2.5-flash Google закрив
+     # для нових користувачів (404 «no longer available»); 3.5-flash — актуальна GA. БАГ-008.
 ] if p["key"]]
 
 def call_llm(prompt, max_tokens=900, temperature=0.4):
