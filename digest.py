@@ -57,6 +57,12 @@ def get_weather():
                 },
                 timeout=10,
             )
+            if r.status_code != 200:
+                # Розділяємо причину «дані недоступні»: 429 = ліміт Open-Meteo
+                # на серії з 28 запитів (issue #3), інше — щось інше.
+                print(f"⚠️ погода {city['name']}: HTTP {r.status_code}")
+                lines.append(f"🌤 {city['name']}: дані недоступні")
+                continue
             d = r.json()["daily"]
             t_max = round(d["temperature_2m_max"][0])
             t_min = round(d["temperature_2m_min"][0])
@@ -73,7 +79,8 @@ def get_weather():
 
             rain_str = f", дощ {rain}мм" if rain > 0.5 else ""
             lines.append(f"{icon} {city['name']}: {t_min}°…{t_max}°{rain_str}")
-        except:
+        except Exception as e:
+            print(f"⚠️ погода {city['name']}: {type(e).__name__}: {str(e)[:80]}")
             lines.append(f"🌤 {city['name']}: дані недоступні")
     return "\n".join(lines)
 
