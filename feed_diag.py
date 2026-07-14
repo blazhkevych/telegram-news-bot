@@ -1,26 +1,25 @@
-"""Детальна діагностика RSS-джерел: чому кожен фід порожній + перевірка КАНДИДАТІВ.
+"""Детальна діагностика RSS-джерел + перевірка КАНДИДАТІВ.
 
 ВАЖЛИВО: запускати НА раннері GitHub (воркфлоу feed_diag.yml), бо картина
 залежить від сервера. Для кожного джерела показує HTTP-статус, кількість
 записів, або тип помилки (таймаут / з'єднання / 200-без-RSS = Cloudflare).
 
-CANDIDATES — список НОВИХ/виправлених адрес на перевірку. Живих (✅) я потім
-впишу в bot.py RSS_FEEDS. Тут вони НЕ впливають на бойовий бот.
+CANDIDATES — нові/виправлені адреси на перевірку. Живих (✅) потім впишу в
+bot.py RSS_FEEDS. Тут вони НЕ впливають на бойовий бот.
 """
 import requests
 import feedparser
 from bot import RSS_FEEDS, notify_admin, FEED_UA
 
-# Кандидати: виправлені адреси мертвих + нові поважні видання + Google News.
 CANDIDATES = [
     # Радіо Свобода — пряма RSS протухла, беремо через Google News (site-фільтр)
     "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk",
     # DW українською — теж через Google News
     "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk",
     # ще світові
-    "http://rss.cnn.com/rss/edition_world.rss",                                                  # CNN World
-    "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en",   # Reuters
-    "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en",    # AP
+    "http://rss.cnn.com/rss/edition_world.rss",
+    "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en",
 ]
 
 
@@ -56,3 +55,8 @@ def main():
 
     cand = ["🧪 КАНДИДАТИ (нові/виправлені на перевірку):"]
     cand += [f"{diag_one(u)} — {u}" for u in CANDIDATES]
+    _send("\n".join(cand))
+
+
+if __name__ == "__main__":
+    main()
