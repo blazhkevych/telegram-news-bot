@@ -49,7 +49,9 @@ jobs:
         run: python feedback_bot.py
 
       - name: Run Twitter bot
-        if: false   # ТИМЧАСОВО ВИМКНЕНО: Twitter 401 Unauthorized. Повернемось пізніше.
+        if: false   # ЗАМОРОЖЕНО: X скасував безкоштовний API (тепер pay-per-use,
+                    # ~$0.20/твіт з посиланням). Див. BUGS.md БАГ-007 / issue #2.
+                    # Код готовий; повернути — коли проект зароблятиме або на Bluesky.
         env:
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
           TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
