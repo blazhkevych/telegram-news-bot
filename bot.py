@@ -8,39 +8,43 @@ import time
 import re
 from datetime import datetime, timedelta
 
+# "name" — назва бренду для підпису «📰 За даними: ...». Задана ЯВНО, бо
+# заголовок самого RSS-фіда довільний і часто беззмістовний: Укрінформ віддає
+# «Останні новини», Цензор — «Цензор.НЕТ - Новини», DOU — «Найцікавіше на DOU»,
+# а Європравда не віддає нічого (і в пості з'являлось «Читати повністю»).
 RSS_FEEDS = [
     # --- Українські (загальні) ---
-    {"url": "https://www.ukrinform.ua/rss/block-lastnews",       "lang": "uk"},
-    {"url": "https://www.pravda.com.ua/rss/view_news/",          "lang": "uk"},
-    {"url": "https://suspilne.media/rss/all.rss",                "lang": "uk"},
-    {"url": "https://tsn.ua/rss/full.rss",                       "lang": "uk"},
-    {"url": "https://rss.unian.net/site/news_ukr.rss",           "lang": "uk"},
-    {"url": "https://nv.ua/ukr/rss/all.xml",                     "lang": "uk"},
-    {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk"},
-    {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk"},
-    {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk"},
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # Радіо Свобода (через Google News)
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # DW українською (через Google News)
-    {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",        "lang": "uk"},
-    {"url": "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk", "lang": "uk"},  # агрегатор
+    {"url": "https://www.ukrinform.ua/rss/block-lastnews",       "lang": "uk", "name": "Укрінформ"},
+    {"url": "https://www.pravda.com.ua/rss/view_news/",          "lang": "uk", "name": "Українська правда"},
+    {"url": "https://suspilne.media/rss/all.rss",                "lang": "uk", "name": "Суспільне"},
+    {"url": "https://tsn.ua/rss/full.rss",                       "lang": "uk", "name": "ТСН"},
+    {"url": "https://rss.unian.net/site/news_ukr.rss",           "lang": "uk", "name": "УНІАН"},
+    {"url": "https://nv.ua/ukr/rss/all.xml",                     "lang": "uk", "name": "NV"},
+    {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk", "name": "Цензор.НЕТ"},
+    {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk", "name": "LB.ua"},
+    {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk", "name": "Європейська правда"},
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "Радіо Свобода"},
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "DW"},
+    {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",        "lang": "uk", "name": "BBC Україна"},
+    {"url": "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "Google News"},
     # --- Українські (розслідування / армія) ---
-    {"url": "https://bihus.info/feed",                           "lang": "uk"},
-    {"url": "https://armyinform.com.ua/feed/",                   "lang": "uk"},
-    {"url": "https://militarnyi.com/uk/feed/",                   "lang": "uk"},
+    {"url": "https://bihus.info/feed",                           "lang": "uk", "name": "Бігус.Інфо"},
+    {"url": "https://armyinform.com.ua/feed/",                   "lang": "uk", "name": "АрміяInform"},
+    {"url": "https://militarnyi.com/uk/feed/",                   "lang": "uk", "name": "Мілітарний"},
     # --- Світові (загальні) ---
-    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",       "lang": "en"},
-    {"url": "https://www.theguardian.com/world/rss",             "lang": "en"},
-    {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en"},
-    {"url": "https://www.euronews.com/rss",                      "lang": "en"},
-    {"url": "http://rss.cnn.com/rss/edition_world.rss",            "lang": "en"},  # CNN World
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en", "lang": "en"},  # Reuters (через Google News)
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en", "lang": "en"},  # AP (через Google News)
+    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",       "lang": "en", "name": "BBC"},
+    {"url": "https://www.theguardian.com/world/rss",             "lang": "en", "name": "The Guardian"},
+    {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en", "name": "Al Jazeera"},
+    {"url": "https://www.euronews.com/rss",                      "lang": "en", "name": "Euronews"},
+    {"url": "http://rss.cnn.com/rss/edition_world.rss",          "lang": "en", "name": "CNN"},
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "Reuters"},
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "AP"},
     # --- Технології / наука ---
-    {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk"},
-    {"url": "https://techcrunch.com/feed/",                      "lang": "en"},
-    {"url": "https://www.theverge.com/rss/index.xml",            "lang": "en"},
-    {"url": "https://feeds.arstechnica.com/arstechnica/index",   "lang": "en"},
-    {"url": "https://www.sciencedaily.com/rss/all.xml",          "lang": "en"},
+    {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk", "name": "DOU"},
+    {"url": "https://techcrunch.com/feed/",                      "lang": "en", "name": "TechCrunch"},
+    {"url": "https://www.theverge.com/rss/index.xml",            "lang": "en", "name": "The Verge"},
+    {"url": "https://feeds.arstechnica.com/arstechnica/index",   "lang": "en", "name": "Ars Technica"},
+    {"url": "https://www.sciencedaily.com/rss/all.xml",          "lang": "en", "name": "ScienceDaily"},
 ]
 
 SPAM_KEYWORDS = [
@@ -447,7 +451,8 @@ def fetch_news(conn):
                     "title":     title,
                     "summary":   summary,
                     "url":       url,
-                    "source":    feed.feed.get("title", ""),
+                    # Явна назва бренду; feed.title — лише запасний варіант
+                    "source":    feed_cfg.get("name") or feed.feed.get("title", ""),
                     "lang":      feed_cfg["lang"],
                     "keywords":  keywords,
                     "image_url": extract_image(entry),
@@ -462,9 +467,17 @@ def fetch_news(conn):
     # Спершу — новини про Україну, потім — за «трендовістю» (частота теми)
     items.sort(key=lambda x: (ukraine_score(x), get_topic_count(conn, x["keywords"])),
                reverse=True)
-    # Обмежуємо кількість кандидатів (щоб частіше набирати до MAX_POSTS_PER_RUN)
-    items = items[:12]
-    return items
+    # Резервуємо місця світовим новинам. Без цього ukraine_score (бал за кожне
+    # українське/воєнне слово) виштовхував англомовні джерела — BBC, Guardian,
+    # Reuters, AP — за межі топ-12, і курація їх узагалі не бачила: канал виходив
+    # лише з українських джерел, хоч і обіцяє «новини України ТА СВІТУ».
+    ua = [x for x in items if x.get("lang") == "uk"]
+    en = [x for x in items if x.get("lang") == "en"]
+    picked = ua[:9] + en[:3]
+    if len(picked) < 12:                       # чогось бракує — добираємо рештою
+        rest = [x for x in ua[9:] + en[3:] if x not in picked]
+        picked += rest[:12 - len(picked)]
+    return picked
 
 def is_relevant(title, summary):
     """Швидка локальна перевірка релевантності без Groq."""
@@ -539,6 +552,10 @@ SKIP відповідай лише у крайньому разі: якщо це
 - Наповнюй пост КОНКРЕТИКОЮ з джерела (що саме, коли, де, наслідки, тло).
   НЕ додавай порожніх фраз-заповнювачів («це підкреслює важливість», «це
   свідчить про...», загальні висновки без нової інформації) — це «вода».
+- ОБОВ'ЯЗКОВО зберігай точні назви, якщо вони є в джерелі: яка саме нагорода
+  чи орден, назва/номер закону, посада, назва документа, угоди, підрозділу.
+  «Нагородив орденом князя Ярослава Мудрого V ступеня» — правильно;
+  «нагородив» без назви ордена — втрачена суть новини.
 - Стиль: точний, нейтральний, без сенсаційності та канцеляризмів
 - Числа і дати: лише цифрами (5 квітня, 3 млрд, 47%)
 - Якщо незнайоме слово — опиши зміст, не залишай англійського
