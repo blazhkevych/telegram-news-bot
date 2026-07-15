@@ -148,6 +148,15 @@ def init_db():
             keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
         )
     """)
+    # Новини, які модель відхилила (SKIP) або які визнано дублем. БЕЗ цієї
+    # таблиці кожен наступний прогін (кожні ~15 хв) ганяв ТІ САМІ новини через
+    # LLM, знову діставав SKIP і марно палив добові ліміти всіх провайдерів
+    # (у логах — 429 на Groq/Cerebras/Gemini і «опубліковано 0 з 12»).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS skipped (
+            hash TEXT PRIMARY KEY, title TEXT, reason TEXT, skipped_at TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -159,6 +168,17 @@ def mark_published(conn, url, title):
     h = hashlib.md5(url.encode()).hexdigest()
     conn.execute("INSERT OR IGNORE INTO published VALUES (?,?,?)",
                  (h, title, datetime.utcnow().isoformat()))
+    conn.commit()
+
+def is_skipped(conn, url):
+    h = hashlib.md5(url.encode()).hexdigest()
+    return conn.execute("SELECT 1 FROM skipped WHERE hash=?", (h,)).fetchone()
+
+def mark_skipped(conn, url, title, reason):
+    """Запам'ятати відхилену новину, щоб не витрачати на неї виклик LLM знову."""
+    h = hashlib.md5(url.encode()).hexdigest()
+    conn.execute("INSERT OR IGNORE INTO skipped VALUES (?,?,?,?)",
+                 (h, title, reason, datetime.utcnow().isoformat()))
     conn.commit()
 
 def get_topic_count(conn, keywords):
@@ -249,10 +269,24 @@ _STOPWORDS = {
     "тому", "уже", "вже", "ще", "як", "що",
 }
 
+# Синоніми, що позначають те саме (інакше «122 дрони» і «122 БпЛА» — різні події).
+_SYNONYMS = {"бпла": "дрон", "безп": "дрон", "шахе": "дрон", "shah": "дрон", "дрон": "дрон"}
+
 def _title_words(title):
-    # префікс слова (грубий стемінг) — щоб «заклад»/«закладу»/«закладом» збігались
+    """Токени заголовка для порівняння схожості (Жаккар).
+    Префікс 4 (грубий стемінг): «росія»/«російських» → «росі», інакше форми
+    того самого слова не збігались і дублі проходили. Числа лишаємо цілими —
+    для новин це найсильніший сигнал тієї самої події (122 дрони, 1470 втрат)."""
     words = re.findall(r"[а-яіїєґёa-z0-9']+", (title or "").lower())
-    return {w[:6] for w in words if len(w) >= 4 and w not in _STOPWORDS}
+    out = set()
+    for w in words:
+        if w.isdigit():
+            if len(w) >= 2:
+                out.add("#" + w)
+        elif len(w) >= 4 and w not in _STOPWORDS:
+            p = w[:4]
+            out.add(_SYNONYMS.get(p, p))
+    return out
 
 def is_duplicate_title(conn, title, hours=24, threshold=0.5):
     """True, якщо про цю ж подію вже постили за останні `hours` (схожість
@@ -313,7 +347,7 @@ def fetch_news(conn):
                 title   = entry.get("title", "")
                 summary = entry.get("summary", "")
                 url     = entry.get("link", "")
-                if not url or is_published(conn, url):
+                if not url or is_published(conn, url) or is_skipped(conn, url):
                     continue
                 if is_spam(title, summary):
                     continue
@@ -480,6 +514,7 @@ def main():
 
         if is_duplicate_title(conn, item["title"]):
             print(f"⏭ Дубль події (вже постили): {item['title'][:50]}")
+            mark_skipped(conn, item["url"], item["title"], "duplicate")
             continue
 
         print(f"📝 {item['title'][:60]}...")
@@ -487,10 +522,12 @@ def main():
         if not post_text:
             continue
         if post_text == "RATE_LIMIT":
-            print("🛑 Зупиняємо — ліміт Groq. Наступний запуск через годину.")
+            print("🛑 Усі провайдери в ліміті — зупиняємо прогін.")
             break
         if post_text.strip().upper().startswith("SKIP"):
             print(f"⏭ AI пропустив: {item['title'][:50]}")
+            # Запам'ятовуємо, інакше наступний прогін знову витратить на неї виклик.
+            mark_skipped(conn, item["url"], item["title"], "ai_skip")
             continue
 
         if post_to_telegram(post_text, item["url"], item.get("image_url")):
