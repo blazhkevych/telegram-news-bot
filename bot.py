@@ -338,6 +338,45 @@ def parse_feed(url):
     return feedparser.parse(url)
 
 
+def merge_by_event(items, threshold=0.5):
+    """Зливає новини про ОДНУ подію з різних джерел в один кандидат.
+
+    Навіщо (три ефекти одразу):
+      • канал не завалює 5 постів про ту саму нічну атаку — виходить один;
+      • у моделі більше матеріалу (summary з кількох джерел) → пост повніший;
+      • 1 виклик LLM замість 5 → бережемо добові ліміти провайдерів.
+    Основою беремо item із найдовшим summary (найінформативніший),
+    решта дають додатковий матеріал і атрибуцію «за даними X, Y»."""
+    merged = []
+    for it in items:
+        w = _title_words(it["title"])
+        placed = False
+        if w:
+            for m in merged:
+                w0 = _title_words(m["title"])
+                if not w0:
+                    continue
+                inter, union = len(w & w0), len(w | w0)
+                if union and inter / union >= threshold:
+                    if it.get("source") and it["source"] not in m["sources"]:
+                        m["sources"].append(it["source"])
+                    if it.get("summary"):
+                        m["extra"].append(it["summary"])
+                    # основою лишаємо найінформативніший варіант
+                    if len(it.get("summary") or "") > len(m.get("summary") or ""):
+                        m["title"], m["summary"], m["url"] = it["title"], it["summary"], it["url"]
+                    if not m.get("image_url") and it.get("image_url"):
+                        m["image_url"] = it["image_url"]
+                    placed = True
+                    break
+        if not placed:
+            it = dict(it)
+            it["sources"] = [it["source"]] if it.get("source") else []
+            it["extra"]   = []
+            merged.append(it)
+    return merged
+
+
 def fetch_news(conn):
     items = []
     for feed_cfg in RSS_FEEDS:
@@ -367,6 +406,11 @@ def fetch_news(conn):
                 })
         except Exception as e:
             print(f"⚠️ {feed_cfg['url']}: {e}")
+    # Одна подія з різних джерел → один кандидат («за даними X, Y»)
+    before = len(items)
+    items  = merge_by_event(items)
+    if before != len(items):
+        print(f"🔗 Злито за подіями: {before} → {len(items)} кандидатів")
     # Спершу — новини про Україну, потім — за «трендовістю» (частота теми)
     items.sort(key=lambda x: (ukraine_score(x), get_topic_count(conn, x["keywords"])),
                reverse=True)
@@ -403,6 +447,16 @@ def rewrite_with_ai(item):
         if item["lang"] == "en"
         else "Новина вже українською — перепиши."
     )
+    # Якщо подію підтвердили кілька джерел — даємо моделі ВЕСЬ їхній матеріал:
+    # пост виходить повнішим, а факти, що збігаються, надійніші.
+    extra = [e for e in (item.get("extra") or []) if e]
+    extra_block = ""
+    if extra:
+        more = "\n".join(f"- {e[:400]}" for e in extra[:3])
+        extra_block = (
+            f"\n\nЦю саму подію описали й інші джерела ({', '.join(item.get('sources', [])[1:])}).\n"
+            f"Матеріал звідти (використай для повноти, факти мають збігатися):\n{more}"
+        )
     prompt = f"""Ти досвідчений журналіст українського Telegram-каналу UA News.
 {lang_note}
 
@@ -450,7 +504,7 @@ def rewrite_with_ai(item):
 
 Заголовок: {item['title']}
 Текст: {item['summary'][:800]}
-Джерело: {item['source']}
+Джерело: {item['source']}{extra_block}
 
 Напиши лише готовий текст або SKIP."""
 
@@ -458,11 +512,13 @@ def rewrite_with_ai(item):
     # Для фактичного переказу різноманіття не потрібне, точність важливіша.
     return call_llm(prompt, max_tokens=900, temperature=0.2)
 
-def format_post_html(text, url):
+def format_post_html(text, url, sources=None):
     """Стиль NV для parse_mode=HTML: перший (непорожній) рядок — жирний
     заголовок, решта абзаців — як є. Екрануємо <, >, & у ВСЬОМУ тексті
     новини, щоб сирі символи не ламали HTML-розмітку Telegram (у Markdown
-    таке валило публікацію на символах _ * [ )."""
+    таке валило публікацію на символах _ * [ ).
+    Якщо подію підтвердили ≥2 джерела — додаємо рядок атрибуції: це і є
+    обіцяне каналом «довіряй тому, що перевірено»."""
     lines = text.strip().split("\n")
     head_idx = next((i for i, ln in enumerate(lines) if ln.strip()), None)
     parts = []
@@ -470,12 +526,16 @@ def format_post_html(text, url):
         esc = html.escape(ln)
         parts.append(f"<b>{esc}</b>" if i == head_idx else esc)
     body = "\n".join(parts).strip()
+    tail = ""
+    if sources and len(sources) > 1:
+        names = ", ".join(html.escape(s) for s in sources[:4] if s)
+        tail = f"\n\n📰 <i>За даними: {names}</i>"
     link = f'<a href="{html.escape(url, quote=True)}">🔗 Читати повністю</a>'
-    return f"{body}\n\n{link}"
+    return f"{body}{tail}\n\n{link}"
 
 
-def post_to_telegram(text, url, image_url=None):
-    full_text   = format_post_html(text, url)
+def post_to_telegram(text, url, image_url=None, sources=None):
+    full_text   = format_post_html(text, url, sources)
     valid_image = image_url and is_valid_image(image_url)
 
     if valid_image:
@@ -530,7 +590,8 @@ def main():
             mark_skipped(conn, item["url"], item["title"], "ai_skip")
             continue
 
-        if post_to_telegram(post_text, item["url"], item.get("image_url")):
+        if post_to_telegram(post_text, item["url"], item.get("image_url"),
+                            item.get("sources")):
             mark_published(conn, item["url"], item["title"])
             count += 1
             time.sleep(3)
