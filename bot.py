@@ -125,7 +125,17 @@ def call_llm(prompt, max_tokens=900, temperature=0.4):
                 STATS["err"][p["name"]] = f"{r.status_code}: {reason[:120]}"
                 continue
             all_rate_limited = False
-            content = r.json()["choices"][0]["message"]["content"].strip()
+            choice  = r.json()["choices"][0]
+            content = (choice.get("message", {}).get("content") or "").strip()
+            # finish_reason="length" = відповідь ОБІРВАНО на ліміті токенів.
+            # Так у канал потрапляли пости на півслові («...дворічну підтрим»):
+            # reasoning-моделі (gpt-oss-120b) палять max_tokens на «міркування»,
+            # і на сам текст їх не лишається. Обірване НЕ публікуємо — краще
+            # віддати наступному провайдеру (Cerebras — без «міркувань»).
+            if choice.get("finish_reason") == "length":
+                print(f"⚠️ {p['name']}: відповідь обірвано на ліміті токенів — наступний провайдер.")
+                STATS["err"][p["name"]] = "обірвано (finish_reason=length)"
+                continue
             if content:
                 STATS["ok"][p["name"]] = STATS["ok"].get(p["name"], 0) + 1
                 return content
@@ -272,6 +282,28 @@ _STOPWORDS = {
 # Синоніми, що позначають те саме (інакше «122 дрони» і «122 БпЛА» — різні події).
 _SYNONYMS = {"бпла": "дрон", "безп": "дрон", "шахе": "дрон", "shah": "дрон", "дрон": "дрон"}
 
+# Топоніми. Потрібні, бо схожість слів обманює: «Росія атакувала Одесу ракетами»
+# і «Росія атакувала Харків ракетами» збігаються на 0.60 (спільні росія/атакувала/
+# ракетами), хоча це РІЗНІ удари по РІЗНИХ містах. Зливати їх — гірше за дубль:
+# зникає ціла новина й виходить хибна атрибуція. Тому: різні локації = різні події.
+_PLACES = [
+    "київ", "харків", "одес", "дніпр", "запор", "львів", "херсон", "миколаїв",
+    "полтав", "сум", "чернігів", "черкас", "житомир", "вінниц", "рівн", "луцьк",
+    "тернопіл", "ужгород", "чернівц", "кропивниц", "хмельниц", "івано-франків",
+    "донеч", "донец", "луган", "маріуп", "краматорськ", "бахмут", "покровськ",
+    "кривий ріг", "кримськ", "крим", "керч", "севастопол", "мелітопол", "бердянськ",
+    "бєлгород", "курськ", "ростов", "новоросійськ", "москв", "брянськ",
+]
+
+def _places(text):
+    t = (text or "").lower()
+    return {p for p in _PLACES if p in t}
+
+def _place_conflict(a, b):
+    """True, якщо в заголовках названі РІЗНІ локації (жодної спільної)."""
+    pa, pb = _places(a), _places(b)
+    return bool(pa) and bool(pb) and not (pa & pb)
+
 def _title_words(title):
     """Токени заголовка для порівняння схожості (Жаккар).
     Префікс 4 (грубий стемінг): «росія»/«російських» → «росі», інакше форми
@@ -302,6 +334,11 @@ def is_duplicate_title(conn, title, hours=24, threshold=0.5):
     for (old_title,) in rows:
         old = _title_words(old_title)
         if not old:
+            continue
+        # Різні міста — різні події, навіть якщо решта слів збігається
+        # («атакували Одесу» / «атакували Харків» = 0.60): інакше друга
+        # новина мовчки зникала б як «дубль».
+        if _place_conflict(title, old_title):
             continue
         inter = len(new & old)
         union = len(new | old)
@@ -353,26 +390,34 @@ def merge_by_event(items, threshold=0.5):
         placed = False
         if w:
             for m in merged:
-                w0 = _title_words(m["title"])
-                if not w0:
+                # Порівнюємо з УСІМА заголовками кластера, а не лише з поточним:
+                # основа кластера змінюється (беремо найінформативніший варіант),
+                # і при порівнянні лише з нею база «пливла» — наступні дублі
+                # переставали збігатися (так у канал пройшли два пости про Мі-28).
+                if not any(
+                    (lambda w0: bool(w0) and (len(w | w0) > 0)
+                                and len(w & w0) / len(w | w0) >= threshold
+                                and not _place_conflict(it["title"], t))(_title_words(t))
+                    for t in m["_titles"]
+                ):
                     continue
-                inter, union = len(w & w0), len(w | w0)
-                if union and inter / union >= threshold:
-                    if it.get("source") and it["source"] not in m["sources"]:
-                        m["sources"].append(it["source"])
-                    if it.get("summary"):
-                        m["extra"].append(it["summary"])
-                    # основою лишаємо найінформативніший варіант
-                    if len(it.get("summary") or "") > len(m.get("summary") or ""):
-                        m["title"], m["summary"], m["url"] = it["title"], it["summary"], it["url"]
-                    if not m.get("image_url") and it.get("image_url"):
-                        m["image_url"] = it["image_url"]
-                    placed = True
-                    break
+                m["_titles"].append(it["title"])
+                if it.get("source") and it["source"] not in m["sources"]:
+                    m["sources"].append(it["source"])
+                if it.get("summary"):
+                    m["extra"].append(it["summary"])
+                # основою лишаємо найінформативніший варіант
+                if len(it.get("summary") or "") > len(m.get("summary") or ""):
+                    m["title"], m["summary"], m["url"] = it["title"], it["summary"], it["url"]
+                if not m.get("image_url") and it.get("image_url"):
+                    m["image_url"] = it["image_url"]
+                placed = True
+                break
         if not placed:
             it = dict(it)
             it["sources"] = [it["source"]] if it.get("source") else []
             it["extra"]   = []
+            it["_titles"] = [it["title"]]
             merged.append(it)
     return merged
 
@@ -480,6 +525,8 @@ def rewrite_with_ai(item):
     наслідки, тло події. Пост має бути насиченим — НЕ в одне речення.
   • НЕ став сам жирний/курсив чи розмітку (*, _, #) — чистий текст;
     форматування додасть система.
+  • НЕ пиши службових позначок і не показуй хід думок: жодних «Para 1»,
+    «Абзац 1», «Заголовок:», «Ось пост:» — одразу готовий текст.
 - Наповнюй пост КОНКРЕТИКОЮ з джерела (що саме, коли, де, наслідки, тло).
   НЕ додавай порожніх фраз-заповнювачів («це підкреслює важливість», «це
   свідчить про...», загальні висновки без нової інформації) — це «вода».
@@ -508,9 +555,11 @@ def rewrite_with_ai(item):
 
 Напиши лише готовий текст або SKIP."""
 
-    # Низька температура (0.2) — щоб модель менше «додумувала» деталі/стать.
-    # Для фактичного переказу різноманіття не потрібне, точність важливіша.
-    return call_llm(prompt, max_tokens=900, temperature=0.2)
+    # Температура 0.2 — щоб модель менше «додумувала» деталі/стать.
+    # max_tokens 1600 (не 900): reasoning-моделі (gpt-oss-120b) спершу палять
+    # токени на внутрішні «міркування», і при 900 на сам пост їх не лишалось —
+    # текст обривався на півслові. Запас + перевірка finish_reason у call_llm.
+    return call_llm(prompt, max_tokens=1600, temperature=0.2)
 
 def format_post_html(text, url, sources=None):
     """Стиль NV для parse_mode=HTML: перший (непорожній) рядок — жирний
