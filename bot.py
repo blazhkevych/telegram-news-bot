@@ -501,8 +501,14 @@ def rewrite_with_ai(item):
     extra_block = ""
     if extra:
         more = "\n".join(f"- {e[:400]}" for e in extra[:3])
+        # sources — це {name, url} (не рядки): беремо саме назви, інакше
+        # join падає з TypeError і бот не публікує нічого.
+        names = [(s.get("name") if isinstance(s, dict) else s)
+                 for s in (item.get("sources") or [])[1:]]
+        names = [n for n in names if n]
+        who = f" ({', '.join(names)})" if names else ""
         extra_block = (
-            f"\n\nЦю саму подію описали й інші джерела ({', '.join(item.get('sources', [])[1:])}).\n"
+            f"\n\nЦю саму подію описали й інші джерела{who}.\n"
             f"Матеріал звідти (використай для повноти, факти мають збігатися):\n{more}"
         )
     prompt = f"""Ти досвідчений журналіст українського Telegram-каналу UA News.
