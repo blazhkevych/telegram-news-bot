@@ -402,8 +402,8 @@ def merge_by_event(items, threshold=0.5):
                 ):
                     continue
                 m["_titles"].append(it["title"])
-                if it.get("source") and it["source"] not in m["sources"]:
-                    m["sources"].append(it["source"])
+                if it.get("source") and not any(s["name"] == it["source"] for s in m["sources"]):
+                    m["sources"].append({"name": it["source"], "url": it["url"]})
                 if it.get("summary"):
                     m["extra"].append(it["summary"])
                 # основою лишаємо найінформативніший варіант
@@ -415,7 +415,10 @@ def merge_by_event(items, threshold=0.5):
                 break
         if not placed:
             it = dict(it)
-            it["sources"] = [it["source"]] if it.get("source") else []
+            # Джерело = назва + ПРЯМЕ посилання на його статтю: читач має мати
+            # змогу перевірити кожне джерело, а не читати назву текстом.
+            it["sources"] = ([{"name": it["source"], "url": it["url"]}]
+                             if it.get("source") else [])
             it["extra"]   = []
             it["_titles"] = [it["title"]]
             merged.append(it)
@@ -577,8 +580,19 @@ def format_post_html(text, url, sources=None):
     body = "\n".join(parts).strip()
     tail = ""
     if sources and len(sources) > 1:
-        names = ", ".join(html.escape(s) for s in sources[:4] if s)
-        tail = f"\n\n📰 <i>За даними: {names}</i>"
+        # Кожне джерело — ПРЯМЕ посилання на його статтю, щоб читач міг
+        # перевірити кожне (раніше були просто назви текстом, і клікабельним
+        # випадково ставало лише те, що Telegram сам розпізнавав як домен).
+        links = []
+        for s in sources[:4]:
+            name, href = (s.get("name"), s.get("url")) if isinstance(s, dict) else (s, None)
+            if not name:
+                continue
+            name_esc = html.escape(name)
+            links.append(f'<a href="{html.escape(href, quote=True)}">{name_esc}</a>'
+                         if href else name_esc)
+        if links:
+            tail = f"\n\n📰 <i>За даними: {', '.join(links)}</i>"
     link = f'<a href="{html.escape(url, quote=True)}">🔗 Читати повністю</a>'
     return f"{body}{tail}\n\n{link}"
 
@@ -685,14 +699,17 @@ def merge_group(items, idxs):
     """Зливає обрані моделлю кандидати однієї події в один пост."""
     base = max((items[i] for i in idxs), key=lambda x: len(x.get("summary") or ""))
     m = dict(base)
-    m["sources"] = list(base.get("sources") or ([base["source"]] if base.get("source") else []))
+    m["sources"] = list(base.get("sources") or
+                        ([{"name": base["source"], "url": base["url"]}]
+                         if base.get("source") else []))
     m["extra"]   = list(base.get("extra") or [])
     for i in idxs:
         it = items[i]
         if it is base:
             continue
-        for s in (it.get("sources") or [it.get("source")]):
-            if s and s not in m["sources"]:
+        for s in (it.get("sources") or
+                  ([{"name": it["source"], "url": it["url"]}] if it.get("source") else [])):
+            if s and not any(x["name"] == s["name"] for x in m["sources"]):
                 m["sources"].append(s)
         if it.get("summary"):
             m["extra"].append(it["summary"])
