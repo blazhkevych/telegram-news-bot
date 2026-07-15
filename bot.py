@@ -575,7 +575,11 @@ def format_post_html(text, url, sources=None):
     заголовок, решта абзаців — як є. Екрануємо <, >, & у ВСЬОМУ тексті
     новини, щоб сирі символи не ламали HTML-розмітку Telegram (у Markdown
     таке валило публікацію на символах _ * [ ).
-    Якщо подію підтвердили ≥2 джерела — додаємо рядок атрибуції: це і є
+
+    Внизу — ЗАВЖДИ «📰 За даними: ...», де кожне джерело є прямим посиланням
+    на свою статтю. Окремий «🔗 Читати повністю» прибрано: він вів рівно на
+    ту саму статтю, що й перше джерело, тобто дублював його. Тепер усі пости
+    однакові, а читач завжди бачить (і може перевірити) джерела — це і є
     обіцяне каналом «довіряй тому, що перевірено»."""
     lines = text.strip().split("\n")
     head_idx = next((i for i, ln in enumerate(lines) if ln.strip()), None)
@@ -584,23 +588,19 @@ def format_post_html(text, url, sources=None):
         esc = html.escape(ln)
         parts.append(f"<b>{esc}</b>" if i == head_idx else esc)
     body = "\n".join(parts).strip()
-    tail = ""
-    if sources and len(sources) > 1:
-        # Кожне джерело — ПРЯМЕ посилання на його статтю, щоб читач міг
-        # перевірити кожне (раніше були просто назви текстом, і клікабельним
-        # випадково ставало лише те, що Telegram сам розпізнавав як домен).
-        links = []
-        for s in sources[:4]:
-            name, href = (s.get("name"), s.get("url")) if isinstance(s, dict) else (s, None)
-            if not name:
-                continue
-            name_esc = html.escape(name)
-            links.append(f'<a href="{html.escape(href, quote=True)}">{name_esc}</a>'
-                         if href else name_esc)
-        if links:
-            tail = f"\n\n📰 <i>За даними: {', '.join(links)}</i>"
-    link = f'<a href="{html.escape(url, quote=True)}">🔗 Читати повністю</a>'
-    return f"{body}{tail}\n\n{link}"
+
+    links = []
+    for s in (sources or [])[:4]:
+        name, href = (s.get("name"), s.get("url")) if isinstance(s, dict) else (s, None)
+        if not name:
+            continue
+        name_esc = html.escape(name)
+        links.append(f'<a href="{html.escape(href, quote=True)}">{name_esc}</a>'
+                     if href else name_esc)
+    if not links:
+        # Запобіжник: без джерел пост лишиться зовсім без посилання на статтю.
+        links = [f'<a href="{html.escape(url, quote=True)}">Читати повністю</a>']
+    return f"{body}\n\n📰 <i>За даними: {', '.join(links)}</i>"
 
 
 def post_to_telegram(text, url, image_url=None, sources=None):
