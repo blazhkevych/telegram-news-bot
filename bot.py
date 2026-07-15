@@ -606,22 +606,127 @@ def post_to_telegram(text, url, image_url=None, sources=None):
     print(f"❌ Telegram: {response.text}")
     return False
 
+def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN):
+    """ОДИН виклик LLM замість ~12 окремих: модель бачить і вже опубліковане
+    за добу, і всіх кандидатів — сама відкидає дублі (зокрема перефрази, чого
+    лексика не вміє: «на Сумщину» vs «по Сумах»), зливає одну подію з різних
+    джерел і вибирає найважливіше.
+
+    Повертає список груп індексів (найважливіша перша) або None — тоді
+    працює запасний лексичний шлях (напр. коли всі провайдери в 429).
+    """
+    if not items:
+        return None
+    since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    rows = conn.execute(
+        "SELECT title FROM published WHERE published_at >= ? "
+        "ORDER BY published_at DESC LIMIT 25", (since,)
+    ).fetchall()
+    published = "\n".join(f"- {r[0][:110]}" for r in rows) or "— (за добу ще нічого)"
+    cands = "\n".join(f"{i+1}. {it['title'][:110]}" for i, it in enumerate(items))
+
+    prompt = f"""Ти головний редактор українського новинного каналу UA News.
+
+ВЖЕ ОПУБЛІКОВАНО за останню добу:
+{published}
+
+НОВІ КАНДИДАТИ:
+{cands}
+
+Завдання:
+1. Відкинь кандидата, якщо він про ТУ САМУ подію, що вже опублікована вище —
+   навіть якщо формулювання інше або цифри уточнені (напр. «скинули КАБи на
+   Сумщину, 17 поранених» і «вдарили КАБами по Сумах, 7 поранених» — це ОДНА подія).
+2. Об'єднай в одну групу кандидатів, які пишуть про ОДНУ подію з різних джерел.
+3. Відкинь нецікаве українському читачеві (реклама, дрібні події, гороскопи).
+4. Обери максимум {max_pick} НАЙВАЖЛИВІШИХ подій; найважливіша — першою.
+   За можливості бери РІЗНІ теми, а не {max_pick} однакових.
+
+ВАЖЛИВО: різні міста — це завжди РІЗНІ події (не об'єднуй).
+Дві різні події в одному місті — теж різні (не об'єднуй).
+
+Відповідай ЛИШЕ номерами: один рядок = одна подія, номери через кому.
+Жодних пояснень, заголовків чи іншого тексту.
+
+Приклад правильної відповіді:
+3,7
+1
+9"""
+
+    raw = call_llm(prompt, max_tokens=400, temperature=0.1)
+    if not raw or raw == "RATE_LIMIT":
+        return None
+
+    groups, seen = [], set()
+    for line in raw.strip().splitlines():
+        line = line.strip().strip(".-•").strip()
+        if not line or not re.fullmatch(r"[\d,\s]+", line):
+            continue  # сміття/пояснення — ігноруємо рядок
+        nums = []
+        for part in line.split(","):
+            part = part.strip()
+            if part.isdigit():
+                n = int(part) - 1
+                if 0 <= n < len(items) and n not in seen:
+                    nums.append(n)
+                    seen.add(n)
+        if nums:
+            groups.append(nums)
+        if len(groups) >= max_pick:
+            break
+    return groups or None
+
+
+def merge_group(items, idxs):
+    """Зливає обрані моделлю кандидати однієї події в один пост."""
+    base = max((items[i] for i in idxs), key=lambda x: len(x.get("summary") or ""))
+    m = dict(base)
+    m["sources"] = list(base.get("sources") or ([base["source"]] if base.get("source") else []))
+    m["extra"]   = list(base.get("extra") or [])
+    for i in idxs:
+        it = items[i]
+        if it is base:
+            continue
+        for s in (it.get("sources") or [it.get("source")]):
+            if s and s not in m["sources"]:
+                m["sources"].append(s)
+        if it.get("summary"):
+            m["extra"].append(it["summary"])
+        if not m.get("image_url") and it.get("image_url"):
+            m["image_url"] = it["image_url"]
+    return m
+
+
 def main():
     conn  = init_db()
     news  = fetch_news(conn)
     count = 0
     print(f"📥 Знайдено {len(news)} нових новин")
 
-    for item in news:
+    # Курація: один виклик LLM відбирає події (дедуп + злиття + важливість).
+    # Лексика цього не витягує — «на Сумщину»/«по Сумах» для неї різні події.
+    groups = curate_with_ai(conn, news)
+    if groups:
+        picked = [merge_group(news, g) for g in groups]
+        ai_curated = True
+        print(f"🧠 Курація AI: {len(news)} кандидатів → {len(picked)} подій "
+              f"(злито джерел: {sum(len(g) for g in groups)})")
+    else:
+        # Запасний шлях (усі провайдери в 429 / модель віддала сміття):
+        # працюємо як раніше — лексичний дедуп по одному кандидату.
+        picked = news
+        ai_curated = False
+        print("↩️ Курація недоступна — запасний лексичний шлях")
+
+    for item in picked:
         if count >= MAX_POSTS_PER_RUN:
             break
         if not item["url"]:
             continue
-        # Релевантність тепер вирішує сама модель (у промпті — SKIP для
-        # нецікавого): жорсткий локальний фільтр більше не ріже новини
-        # (напр. науку/здоров'я англійською, яку він не розпізнавав).
-
-        if is_duplicate_title(conn, item["title"]):
+        # Дублі при курації вже відсіяла модель (вона бачила опубліковане за
+        # добу). Лексичну перевірку лишаємо ЛИШЕ для запасного шляху — інакше
+        # вона хибно ріже легітимне (напр. «Одеса» vs «Харків» = 0.60).
+        if not ai_curated and is_duplicate_title(conn, item["title"]):
             print(f"⏭ Дубль події (вже постили): {item['title'][:50]}")
             mark_skipped(conn, item["url"], item["title"], "duplicate")
             continue
