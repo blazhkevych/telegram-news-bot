@@ -81,14 +81,34 @@ def notify_admin(text):
 LLM_PROVIDERS = [p for p in [
     # Порядок = ЯКІСТЬ (найсильніша модель перша) — це прямо б'є в БАГ-006
     # (галюцинації/вигадана стать: сильніша модель менше «додумує»).
-    # Ланцюг самобалансується: якщо Groq упреться в добовий ліміт (429) —
-    # автоматично підхоплює Cerebras (щедрий ліміт + швидкість), тобто НЕ гірше
-    # за попередню поведінку. Підсумок адміну (STATS) показує реальний баланс
-    # «Groq×N, Cerebras×M» — за ним видно, чи тримає Groq навантаження.
+    # Ланцюг самобалансується: хто в 429 — того пропускаємо. Підсумок адміну
+    # (STATS) показує реальний баланс «Groq×N, GitHub×M…».
+    # "top": True — модель сильна, але з малим добовим лімітом: save_strong
+    # (добивочні пости) відсуває такі в кінець черги, щоб квота діставалась
+    # курації та найважливішому посту прогону.
     {"name": "Groq",
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
-     "model": "openai/gpt-oss-120b"},     # 120B, найсильніша в ланцюзі; llama знято 2026-06-17
+     "model": "openai/gpt-oss-120b",      # 120B; llama знято 2026-06-17
+     "top":  True},
+    {"name": "GitHub",
+     # GitHub Models: БЕЗКОШТОВНО через токен самого workflow (permissions:
+     # models: read у news_bot.yml) — жодних нових ключів/реєстрацій.
+     # gpt-4.1-mini — low-tier: 150 запитів/добу, 15/хв, ~8k токенів на вхід
+     # (наші промпти ≈3-5k — вміщаються). Сильніша за всі наші резерви.
+     "url":  "https://models.github.ai/inference/chat/completions",
+     "key":  os.environ.get("GITHUB_MODELS_TOKEN"),
+     "model": "openai/gpt-4.1-mini",
+     "top":  True},
+    {"name": "Mistral",
+     # La Plateforme, план Experiment: 1 МЛРД токенів/місяць безкоштовно
+     # (≈30 млн/добу — найщедріший ліміт з усіх) — ідеальний робочий кінь
+     # замість gemma. Активується сам, щойно власник додасть секрет
+     # MISTRAL_API_KEY (реєстрація безкоштовна, без картки; на free-плані
+     # треба погодити opt-in на навчання — для публічних новин прийнятно).
+     "url":  "https://api.mistral.ai/v1/chat/completions",
+     "key":  os.environ.get("MISTRAL_API_KEY"),
+     "model": "mistral-large-latest"},
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
@@ -113,7 +133,9 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
     Якщо резервні впали — Groq усе одно підстрахує (він у кінці черги)."""
     providers = LLM_PROVIDERS
     if save_strong and len(LLM_PROVIDERS) > 1:
-        providers = LLM_PROVIDERS[1:] + LLM_PROVIDERS[:1]
+        # «Дорогі» моделі (top: сильні, але з куцим добовим лімітом) — у кінець
+        providers = ([p for p in LLM_PROVIDERS if not p.get("top")]
+                     + [p for p in LLM_PROVIDERS if p.get("top")])
     all_rate_limited = True
     for p in providers:
         try:
