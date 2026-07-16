@@ -63,8 +63,13 @@
 > • Mistral La Plateforme (Experiment): 1 МЛРД токенів/міс — майбутній робочий кінь замість gemma.
 >   Код готовий (mistral-large-latest), чекає секрет MISTRAL_API_KEY від власника. Після додавання:
 >   перевірити логи — якщо large на free недоступна (401/403), змінити на mistral-medium-latest.
-> • Ланцюг тепер: Groq(top) → GitHub(top) → Mistral → Cerebras → Gemini; save_strong відсуває top-и в кінець.
-> • Відхилені варіанти: OpenRouter (200 зап./добу — мало), NVIDIA NIM/Cohere (реєстрації, дрібні ліміти),
+> • NVIDIA NIM (переперевірено після питання власника — перший відкид був за застарілими даними):
+>   кредитні ліміти ПРИБРАНО у 2026 — тариф безлімітний за обсягом, стеля лише 40 зап./хв (нам вистачає).
+>   Каталог публічний (118 моделей): deepseek-v4-pro/flash, mistral-large-3-675b, nemotron-ultra-253b.
+>   Підключено deepseek-v4-flash (фронтир без «міркувань», вкладається у timeout 30с); чекає секрет
+>   NVIDIA_API_KEY (build.nvidia.com, Developer Program, лише email). Коміт c9e0265.
+> • Ланцюг тепер: Groq(top) → GitHub(top) → Mistral → NVIDIA → Cerebras → Gemini; save_strong відсуває top-и в кінець.
+> • Відхилені варіанти: OpenRouter (200 зап./добу — мало), Cohere (1000 зап./МІСЯЦЬ),
 >   HuggingFace ($0.10/міс кредитів — сміховинно).
 >
 > ⏭ НАСТУПНА СЕСІЯ: (а) вечірній підсумок 16.07 21:00 — посилання/вигляд (перша бойова перевірка);
