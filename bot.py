@@ -168,6 +168,12 @@ def init_db():
             hash TEXT PRIMARY KEY, title TEXT, published_at TEXT
         )
     """)
+    # msg_id — номер повідомлення в каналі: вечірній дайджест робить із нього
+    # прямі посилання t.me/<канал>/<msg_id> на кожен пункт підсумку.
+    try:
+        conn.execute("ALTER TABLE published ADD COLUMN msg_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # колонка вже є
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_topics (
             keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
@@ -189,10 +195,10 @@ def is_published(conn, url):
     h = hashlib.md5(url.encode()).hexdigest()
     return conn.execute("SELECT 1 FROM published WHERE hash=?", (h,)).fetchone()
 
-def mark_published(conn, url, title):
+def mark_published(conn, url, title, msg_id=None):
     h = hashlib.md5(url.encode()).hexdigest()
-    conn.execute("INSERT OR IGNORE INTO published VALUES (?,?,?)",
-                 (h, title, datetime.utcnow().isoformat()))
+    conn.execute("INSERT OR IGNORE INTO published VALUES (?,?,?,?)",
+                 (h, title, datetime.utcnow().isoformat(), msg_id))
     conn.commit()
 
 def is_skipped(conn, url):
@@ -390,6 +396,35 @@ def parse_feed(url):
     return feedparser.parse(url)
 
 
+def fetch_article_text(url, max_chars=3500):
+    """Повний текст статті за посиланням з RSS.
+
+    Навіщо: RSS-анонс часто ~2 речення-тизер без суті («НБУ відповів на
+    чутки» — а ЩО відповів, лише у статті). Замість відкидати такі новини,
+    бот іде за посиланням і віддає моделі справжній текст. Пости стають
+    повнішими для ВСІХ новин, не лише тизерів (~6 запитів на прогін — дешево).
+    Повертає '' якщо не вийшло (пейвол/JS/редірект Google News) — тоді
+    модель працює з анонсом, а SKIP-тизер лишається останнім запобіжником."""
+    try:
+        r = requests.get(url, headers={"User-Agent": FEED_UA}, timeout=12,
+                         allow_redirects=True)
+        if r.status_code != 200 or not r.text:
+            return ""
+        page = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", r.text)
+        # <article> — там менше сміття (меню, «читайте також»), якщо сайт її має
+        m = re.search(r"(?is)<article[^>]*>(.*?)</article>", page)
+        if m:
+            page = m.group(1)
+        paras = re.findall(r"(?is)<p[^>]*>(.*?)</p>", page)
+        text  = " ".join(re.sub(r"(?s)<[^>]+>", " ", p) for p in paras)
+        text  = html.unescape(re.sub(r"\s+", " ", text)).strip()
+        # <200 символів = витягли не статтю, а обгортку — краще чесне «нема»
+        return text[:max_chars] if len(text) >= 200 else ""
+    except Exception as e:
+        print(f"⚠️ fetch_article {url[:60]}: {str(e)[:60]}")
+        return ""
+
+
 def merge_by_event(items, threshold=0.5):
     """Зливає новини про ОДНУ подію з різних джерел в один кандидат.
 
@@ -535,6 +570,14 @@ def rewrite_with_ai(item, save_strong=False):
             f"\n\nЦю саму подію описали й інші джерела{who}.\n"
             f"Матеріал звідти (використай для повноти, факти мають збігатися):\n{more}"
         )
+    # Повний текст статті: анонс у RSS часто тизер без суті. Сирий HTML-текст
+    # може містити сміття сайту — модель попереджено брати лише саму новину.
+    article = fetch_article_text(item["url"])
+    article_block = (
+        f"\n\nПовний текст статті (взято з сайту автоматично; ігноруй уривки"
+        f" меню/реклами/«читайте також», бери лише те, що про цю новину):\n{article}"
+        if article else ""
+    )
     prompt = f"""Ти досвідчений журналіст українського Telegram-каналу UA News.
 {lang_note}
 
@@ -547,9 +590,9 @@ SKIP відповідай лише у крайньому разі:
 - у тексті взагалі немає про що писати;
 - ТИЗЕР БЕЗ СУТІ: заголовок обіцяє відповідь («відповіли на чутки»,
   «пояснили, чи…», «назвали причину», «стало відомо…»), а САМОЇ відповіді
-  (що саме вирішили / пояснили / назвали) у тексті джерела НЕМАЄ. Пост
-  «посадовці почали пояснювати» без того, ЩО САМЕ вони пояснили, підриває
-  довіру — такого поста краще не публікувати взагалі.
+  (що саме вирішили / пояснили / назвали) немає НІ в анонсі, НІ в повному
+  тексті статті нижче. Пост «посадовці почали пояснювати» без того, ЩО САМЕ
+  вони пояснили, підриває довіру — такого краще не публікувати взагалі.
 В усіх інших сумнівах — ПИШИ, а не пропускай.
 
 Якщо важлива — напиши у стилі якісної журналістики:
@@ -596,8 +639,8 @@ SKIP відповідай лише у крайньому разі:
 - Жодних припущень, домислів чи фактів, яких немає в джерелі.
 
 Заголовок: {item['title']}
-Текст: {item['summary'][:800]}
-Джерело: {item['source']}{extra_block}
+Анонс із RSS: {item['summary'][:800]}
+Джерело: {item['source']}{extra_block}{article_block}
 
 Напиши лише готовий текст або SKIP."""
 
@@ -660,7 +703,11 @@ def post_to_telegram(text, url, image_url=None, sources=None):
 
     if response.status_code == 200:
         print(f"✅ {'🖼' if valid_image else '📝'} {url}")
-        return True
+        # message_id потрібен дайджесту для прямого посилання на пост.
+        try:
+            return response.json()["result"]["message_id"]
+        except Exception:
+            return True
     print(f"❌ Telegram: {response.text}")
     return False
 
@@ -825,9 +872,11 @@ def main():
             skipped_cnt += 1
             continue
 
-        if post_to_telegram(post_text, item["url"], item.get("image_url"),
-                            item.get("sources")):
-            mark_published(conn, item["url"], item["title"])
+        msg_id = post_to_telegram(post_text, item["url"], item.get("image_url"),
+                                  item.get("sources"))
+        if msg_id:
+            mark_published(conn, item["url"], item["title"],
+                           msg_id if isinstance(msg_id, int) else None)
             count += 1
             time.sleep(3)
 
