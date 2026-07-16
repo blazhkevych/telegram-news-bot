@@ -23,6 +23,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # ref: main — брати АКТУАЛЬНУ вершину гілки на момент виконання.
+          # Без цього GitHub пришпилює SHA на момент СТВОРЕННЯ прогону: якщо
+          # прогін чекав у черзі concurrency, він стартував зі старої БД і
+          # ловив конфлікт published.db на push (втрата стану → дублі).
+          ref: main
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -83,6 +88,16 @@ jobs:
             if git pull --rebase origin main && git push; then
               echo "✅ БД збережено (спроба $i)"
               exit 0
+            fi
+            # Конфлікт бінарної БД (хтось запушив свою published.db, поки ми
+            # працювали): у rebase «theirs» = НАШ коміт — лишаємо нашу БД
+            # (у ній пости ЦЬОГО прогону) і завершуємо rebase. Якщо не
+            # вийшло — скидаємо недобитий rebase, інакше наступна спроба
+            # падає з «unmerged files» (саме так згорів прогін 16.07 15:47).
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              git checkout --theirs published.db twitter.db feedback_offset.txt 2>/dev/null || true
+              git add published.db twitter.db feedback_offset.txt 2>/dev/null || true
+              GIT_EDITOR=true git rebase --continue || git rebase --abort || true
             fi
             echo "⚠️ спроба $i не вдалась — повтор"
             sleep 5
