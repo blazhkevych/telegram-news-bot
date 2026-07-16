@@ -659,9 +659,12 @@ def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN * 2):
     if not items:
         return None
     since = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    # LIMIT 60, не 25: канал видає ~300 постів/добу, тож 25 заголовків — це
+    # лише ~2 години історії. Ранкові події ставали «невидимими» для курації
+    # вже ввечері — саме так 15.07 ті самі новини заходили в канал по 2-3 рази.
     rows = conn.execute(
         "SELECT title FROM published WHERE published_at >= ? "
-        "ORDER BY published_at DESC LIMIT 25", (since,)
+        "ORDER BY published_at DESC LIMIT 60", (since,)
     ).fetchall()
     published = "\n".join(f"- {r[0][:110]}" for r in rows) or "— (за добу ще нічого)"
     cands = "\n".join(f"{i+1}. {it['title'][:110]}" for i, it in enumerate(items))
@@ -694,7 +697,11 @@ def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN * 2):
 1
 9"""
 
-    raw = call_llm(prompt, max_tokens=400, temperature=0.1)
+    # max_tokens 1600, не 400: gpt-oss-120b (Groq) — reasoning-модель, вона
+    # спалює токени на «міркування» ще ДО відповіді. При 400 кожен виклик
+    # обривався (finish_reason=length), Groq відпадав — і курацію ЗАВЖДИ
+    # робила найслабша модель ланцюга (gemma-31b), яка пропускала дублі.
+    raw = call_llm(prompt, max_tokens=1600, temperature=0.1)
     if not raw or raw == "RATE_LIMIT":
         return None
 
@@ -768,10 +775,14 @@ def main():
             break
         if not item["url"]:
             continue
-        # Дублі при курації вже відсіяла модель (вона бачила опубліковане за
-        # добу). Лексичну перевірку лишаємо ЛИШЕ для запасного шляху — інакше
-        # вона хибно ріже легітимне (напр. «Одеса» vs «Харків» = 0.60).
-        if not ai_curated and is_duplicate_title(conn, item["title"]):
+        # Лексична перевірка дублів — на ОБОХ шляхах (не лише запасному).
+        # Курація бачить тільки хвіст опублікованого і на слабкій моделі
+        # пропускала повтори: 15–16.07 у канал по 2-3 рази зайшли «ЦРУ:
+        # 20-30 хвилин», «21-й пакет санкцій», Мі-28 — зокрема ТОЙ САМИЙ
+        # заголовок з Google News (URL інший → URL-дедуп не ловить).
+        # Хибного злиття різних міст не буде: _place_conflict усередині
+        # is_duplicate_title лишає «Одеса» vs «Харків» окремими подіями.
+        if is_duplicate_title(conn, item["title"]):
             print(f"⏭ Дубль події (вже постили): {item['title'][:50]}")
             mark_skipped(conn, item["url"], item["title"], "duplicate")
             continue
