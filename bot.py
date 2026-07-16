@@ -396,7 +396,7 @@ def parse_feed(url):
     return feedparser.parse(url)
 
 
-def fetch_article_text(url, max_chars=3500):
+def fetch_article_text(url, max_chars=2500):
     """Повний текст статті за посиланням з RSS.
 
     Навіщо: RSS-анонс часто ~2 речення-тизер без суті («НБУ відповів на
@@ -572,7 +572,11 @@ def rewrite_with_ai(item, save_strong=False):
         )
     # Повний текст статті: анонс у RSS часто тизер без суті. Сирий HTML-текст
     # може містити сміття сайту — модель попереджено брати лише саму новину.
-    article = fetch_article_text(item["url"])
+    # Тягнемо ЛИШЕ коли анонс куций: у довгому (700+ симв.) суть уже є, а
+    # зайві ~1000 токенів на кожен виклик з'їдали добовий ліміт Cerebras —
+    # у підсумках адміна 16.07 по обіді з'явились «Cerebras: ліміт (429)».
+    article = (fetch_article_text(item["url"])
+               if len(item.get("summary") or "") < 700 else "")
     article_block = (
         f"\n\nПовний текст статті (взято з сайту автоматично; ігноруй уривки"
         f" меню/реклами/«читайте також», бери лише те, що про цю новину):\n{article}"
@@ -645,10 +649,12 @@ SKIP відповідай лише у крайньому разі:
 Напиши лише готовий текст або SKIP."""
 
     # Температура 0.2 — щоб модель менше «додумувала» деталі/стать.
-    # max_tokens 1600 (не 900): reasoning-моделі (gpt-oss-120b) спершу палять
-    # токени на внутрішні «міркування», і при 900 на сам пост їх не лишалось —
-    # текст обривався на півслові. Запас + перевірка finish_reason у call_llm.
-    return call_llm(prompt, max_tokens=1600, temperature=0.2,
+    # max_tokens 2400 (було 900→1600): reasoning-моделі (gpt-oss-120b, gemini-3.5)
+    # спершу палять токени на внутрішні «міркування» — при нижчій стелі виклик
+    # обривався (finish_reason=length): квота витрачена, результату нуль
+    # (16.07 це стабільно ловив Gemini). Стеля — це ЗАПАС, а не витрата:
+    # моделі, що не «думають», більше токенів не згенерують.
+    return call_llm(prompt, max_tokens=2400, temperature=0.2,
                     save_strong=save_strong)
 
 def format_post_html(text, url, sources=None):
@@ -765,11 +771,12 @@ def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN * 2):
 1
 9"""
 
-    # max_tokens 1600, не 400: gpt-oss-120b (Groq) — reasoning-модель, вона
-    # спалює токени на «міркування» ще ДО відповіді. При 400 кожен виклик
+    # max_tokens 2400, не 400: reasoning-моделі (gpt-oss-120b, gemini-3.5)
+    # спалюють токени на «міркування» ще ДО відповіді. При 400 кожен виклик
     # обривався (finish_reason=length), Groq відпадав — і курацію ЗАВЖДИ
     # робила найслабша модель ланцюга (gemma-31b), яка пропускала дублі.
-    raw = call_llm(prompt, max_tokens=1600, temperature=0.1)
+    # Обірваний виклик = витрачена квота БЕЗ результату, тому стеля з запасом.
+    raw = call_llm(prompt, max_tokens=2400, temperature=0.1)
     if not raw or raw == "RATE_LIMIT":
         return None
 
