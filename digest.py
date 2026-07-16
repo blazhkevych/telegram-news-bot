@@ -2,7 +2,7 @@ import os
 import requests
 import sqlite3
 from datetime import datetime, date
-from bot import call_llm   # той самий ланцюг провайдерів (Gemini→Cerebras→Groq)
+from bot import call_llm   # той самий ланцюг провайдерів (Groq→Cerebras→Gemini)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
@@ -45,25 +45,35 @@ CITIES = [
 ]
 
 def get_weather():
+    """Погода ОДНИМ запитом на всі міста (issue #3).
+
+    29 послідовних запитів до Open-Meteo стабільно падали з ReadTimeout для
+    ~9 останніх міст (сервіс пригальмовує серію з одного IP) — у дайджесті
+    третина міст була «дані недоступні». API приймає списки координат через
+    кому і повертає масив результатів у тому ж порядку."""
+    try:
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude":  ",".join(str(c["lat"]) for c in CITIES),
+                "longitude": ",".join(str(c["lon"]) for c in CITIES),
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
+                "timezone": "Europe/Kyiv", "forecast_days": 1,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):   # одна точка → об'єкт, кілька → масив
+            data = [data]
+    except Exception as e:
+        print(f"⚠️ погода (спільний запит): {type(e).__name__}: {str(e)[:80]}")
+        return "дані тимчасово недоступні"
+
     lines = []
-    for city in CITIES:
+    for city, block in zip(CITIES, data):
         try:
-            r = requests.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": city["lat"], "longitude": city["lon"],
-                    "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
-                    "timezone": "Europe/Kyiv", "forecast_days": 1,
-                },
-                timeout=10,
-            )
-            if r.status_code != 200:
-                # Розділяємо причину «дані недоступні»: 429 = ліміт Open-Meteo
-                # на серії з 28 запитів (issue #3), інше — щось інше.
-                print(f"⚠️ погода {city['name']}: HTTP {r.status_code}")
-                lines.append(f"🌤 {city['name']}: дані недоступні")
-                continue
-            d = r.json()["daily"]
+            d = block["daily"]
             t_max = round(d["temperature_2m_max"][0])
             t_min = round(d["temperature_2m_min"][0])
             rain  = d["precipitation_sum"][0]
@@ -154,10 +164,13 @@ def evening_digest():
     return text
 
 def post(text):
+    # БЕЗ parse_mode: текст дайджесту пише LLM, і випадкові символи _ * [
+    # у Markdown валять ВЕСЬ пост із 400 Bad Request (той самий клас багу,
+    # через який bot.py перевели на HTML). Розмітка дайджесту не потрібна.
     r = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
         json={"chat_id": CHANNEL_ID, "text": text,
-              "parse_mode": "Markdown", "disable_web_page_preview": True}
+              "disable_web_page_preview": True}
     )
     if r.status_code == 200:
         print(f"✅ Дайджест опубліковано ({DIGEST_TYPE})")
