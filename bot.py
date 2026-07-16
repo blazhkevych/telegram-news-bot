@@ -100,11 +100,22 @@ LLM_PROVIDERS = [p for p in [
      # для нових користувачів (404 «no longer available»); 3.5-flash — актуальна GA. БАГ-008.
 ] if p["key"]]
 
-def call_llm(prompt, max_tokens=900, temperature=0.4):
+def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
     """Пробує провайдерів по черзі. Повертає текст, 'RATE_LIMIT' (усі в ліміті)
-    або None (усі впали з іншої причини)."""
+    або None (усі впали з іншої причини).
+
+    save_strong=True — бережемо найсильнішу модель (першу в списку): черга
+    починається з резервних. Навіщо: добовий ліміт Groq (120B) з'їдався за
+    перші години ~400 викликами, і решту дня ВСЕ писала слабка gemma (звідси
+    одруки «дешею», «всіій»). Тепер сильна модель дістається найважливішому
+    (курація + топ-подія кожного прогону = ~200 викликів, розтягнутих на
+    добу), а добивка йде на Cerebras/Gemini, чиї щедрі ліміти простоювали.
+    Якщо резервні впали — Groq усе одно підстрахує (він у кінці черги)."""
+    providers = LLM_PROVIDERS
+    if save_strong and len(LLM_PROVIDERS) > 1:
+        providers = LLM_PROVIDERS[1:] + LLM_PROVIDERS[:1]
     all_rate_limited = True
-    for p in LLM_PROVIDERS:
+    for p in providers:
         try:
             r = requests.post(
                 p["url"],
@@ -502,7 +513,7 @@ def is_relevant(title, summary):
     ]
     return any(kw in text for kw in relevant_keywords)
 
-def rewrite_with_ai(item):
+def rewrite_with_ai(item, save_strong=False):
     lang_note = (
         "Новина англійською — переклади та перепиши українською."
         if item["lang"] == "en"
@@ -585,7 +596,8 @@ SKIP відповідай лише у крайньому разі: якщо це
     # max_tokens 1600 (не 900): reasoning-моделі (gpt-oss-120b) спершу палять
     # токени на внутрішні «міркування», і при 900 на сам пост їх не лишалось —
     # текст обривався на півслові. Запас + перевірка finish_reason у call_llm.
-    return call_llm(prompt, max_tokens=1600, temperature=0.2)
+    return call_llm(prompt, max_tokens=1600, temperature=0.2,
+                    save_strong=save_strong)
 
 def format_post_html(text, url, sources=None):
     """Стиль NV для parse_mode=HTML: перший (непорожній) рядок — жирний
@@ -788,7 +800,10 @@ def main():
             continue
 
         print(f"📝 {item['title'][:60]}...")
-        post_text = rewrite_with_ai(item)
+        # Перший пост прогону — найважливіша подія (курація сортує за
+        # важливістю): їй — найсильніша модель. Решті — резервні провайдери,
+        # щоб добовий ліміт Groq розтягнувся на весь день (див. call_llm).
+        post_text = rewrite_with_ai(item, save_strong=count > 0)
         if not post_text:
             continue
         if post_text == "RATE_LIMIT":
