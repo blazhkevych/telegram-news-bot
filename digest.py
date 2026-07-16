@@ -1,4 +1,5 @@
 import os
+import html
 import requests
 import sqlite3
 from datetime import datetime, date
@@ -112,19 +113,28 @@ def get_rates():
 
 
 def get_recent_news():
+    """[(title, msg_id), ...] за сьогодні. msg_id — номер поста в каналі
+    (може бути None для старих записів або якщо колонки ще немає)."""
     conn = sqlite3.connect(DB_PATH)
     today_str = date.today().isoformat()
-    rows = conn.execute("""
-        SELECT title FROM published
-        WHERE published_at >= ?
-        ORDER BY published_at DESC LIMIT 20
-    """, (today_str,)).fetchall()
+    try:
+        rows = conn.execute("""
+            SELECT title, msg_id FROM published
+            WHERE published_at >= ?
+            ORDER BY published_at DESC LIMIT 20
+        """, (today_str,)).fetchall()
+    except sqlite3.OperationalError:      # БД ще без колонки msg_id
+        rows = [(t, None) for (t,) in conn.execute("""
+            SELECT title FROM published
+            WHERE published_at >= ?
+            ORDER BY published_at DESC LIMIT 20
+        """, (today_str,)).fetchall()]
     conn.close()
-    return [r[0] for r in rows]
+    return rows
 
 def morning_digest():
     weather = get_weather()
-    titles  = get_recent_news()
+    titles  = [t for t, _ in get_recent_news()]
     news_text = "\n".join(f"- {t}" for t in titles[:10]) or "Новини ще збираються."
     today_fmt = date.today().strftime("%d.%m.%Y")
 
@@ -146,9 +156,59 @@ def morning_digest():
     return f"{intro}{rates_line}\n\n🌤 Погода на {today_fmt}:\n{weather}"
 
 def evening_digest():
-    titles = get_recent_news()
-    news_text = "\n".join(f"- {t}" for t in titles[:15]) or "Новини дня відсутні."
+    """Повертає (text, parse_mode). Основний шлях — HTML зі стрілкою-посиланням
+    на ПОВНИЙ пост каналу під кожним пунктом (прохання власника: «сухий» список
+    заголовків без посилань не давав читачеві шляху до деталей). Модель обирає
+    топ-5 і віддає «номер|речення» — посилання підставляємо самі з msg_id,
+    щоб LLM не могла їх переплутати чи вигадати."""
+    rows = get_recent_news()[:15]
+    if not rows:
+        return "🌙 Підсумки дня від UA News незабаром.", None
+    news_text = "\n".join(f"{i+1}. {t}" for i, (t, _) in enumerate(rows))
 
+    raw = call_llm(f"""Ти редактор українського каналу UA News. Із пронумерованого списку
+подій дня обери топ-5 НАЙВАЖЛИВІШИХ (різні теми, без двох пунктів про одне).
+Для кожної напиши ОДНЕ змістовне речення-підсумок: живою мовою, без
+канцелярщини, з головною цифрою/фактом. Почни речення доречним за тоном
+емодзі (для трагедій — стримані 💥🚨🕯, не святкові).
+
+Відповідай СУВОРО по рядку на подію, без будь-якого іншого тексту:
+<номер зі списку>|<емодзі й речення>
+
+Приклад:
+7|💶 ЄС виділяє Україні 920 млн євро на відновлення енергетики перед зимою.
+
+Список подій:
+{news_text}""", max_tokens=700, temperature=0.3)
+    if not raw or raw == "RATE_LIMIT":
+        return "🌙 Підсумки дня від UA News незабаром.", None
+
+    # Публічний канал: CHANNEL_ID = "@username" → лінк t.me/username/msg_id
+    username = CHANNEL_ID.lstrip("@") if str(CHANNEL_ID).startswith("@") else None
+    items, used = [], set()
+    for line in raw.strip().splitlines():
+        if "|" not in line:
+            continue
+        num, text = line.split("|", 1)
+        num, text = num.strip().strip(".").strip(), text.strip()
+        if not num.isdigit() or not text:
+            continue
+        idx = int(num) - 1
+        if not (0 <= idx < len(rows)) or idx in used:
+            continue
+        used.add(idx)
+        msg_id = rows[idx][1]
+        link = (f' <a href="https://t.me/{username}/{msg_id}">→ пост</a>'
+                if username and msg_id else "")
+        items.append(f"{len(items)+1}. {html.escape(text)}{link}")
+        if len(items) == 5:
+            break
+
+    if len(items) >= 3:
+        return ("<b>🌙 Підсумки дня від UA News</b>\n\n"
+                + "\n\n".join(items)), "HTML"
+
+    # Модель не втримала формат «номер|текст» — запасний простий шлях, як раніше
     text = call_llm(f"""Ти редактор UA News. Склади вечірній підсумок — топ-5 подій дня.
 Починай з "🌙 Підсумки дня від UA News"
 Формат: нумерований список, кожен пункт 1 речення.
@@ -160,17 +220,20 @@ def evening_digest():
 
 Напиши лише текст підсумку.""", max_tokens=600, temperature=0.3)
     if not text or text == "RATE_LIMIT":
-        return "🌙 Підсумки дня від UA News незабаром."
-    return text
+        return "🌙 Підсумки дня від UA News незабаром.", None
+    return text, None
 
-def post(text):
-    # БЕЗ parse_mode: текст дайджесту пише LLM, і випадкові символи _ * [
-    # у Markdown валять ВЕСЬ пост із 400 Bad Request (той самий клас багу,
-    # через який bot.py перевели на HTML). Розмітка дайджесту не потрібна.
+def post(text, parse_mode=None):
+    # parse_mode лише той, що явно передали (HTML з екрануванням у вечірньому
+    # дайджесті). Сирий LLM-текст шлемо БЕЗ parse_mode: випадкові _ * [ у
+    # Markdown валили б увесь пост 400-кою (клас багу, вже лікований у bot.py).
+    payload = {"chat_id": CHANNEL_ID, "text": text,
+               "disable_web_page_preview": True}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     r = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": CHANNEL_ID, "text": text,
-              "disable_web_page_preview": True}
+        json=payload
     )
     if r.status_code == 200:
         print(f"✅ Дайджест опубліковано ({DIGEST_TYPE})")
@@ -184,7 +247,14 @@ def main():
         ok = post(morning_digest())
     else:
         print("🌙 Вечірній підсумок...")
-        ok = post(evening_digest())
+        text, mode = evening_digest()
+        ok = post(text, mode)
+        if not ok and mode == "HTML":
+            # Захисна сітка: якщо Telegram відхилив HTML-варіант — шлемо
+            # той самий текст без розмітки, аби підсумок точно вийшов.
+            import re as _re
+            plain = _re.sub(r"<[^>]+>", "", text)
+            ok = post(html.unescape(plain))
     return ok
 
 if __name__ == "__main__":
