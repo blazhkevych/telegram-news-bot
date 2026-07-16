@@ -109,6 +109,16 @@ LLM_PROVIDERS = [p for p in [
      "url":  "https://api.mistral.ai/v1/chat/completions",
      "key":  os.environ.get("MISTRAL_API_KEY"),
      "model": "mistral-large-latest"},
+    {"name": "NVIDIA",
+     # build.nvidia.com (NIM): БЕЗЛІМІТ за обсягом на безкоштовному тарифі
+     # (кредитні ліміти прибрано 2026), обмеження лише 40 запитів/хв — нам
+     # достатньо (≈7 послідовних викликів на прогін). Каталог 118 моделей.
+     # deepseek-v4-flash — фронтир-клас, швидка, без «міркувань» (вкладається
+     # в timeout=30с; v4-pro якісніша, але повільна). Активується сам, щойно
+     # власник додасть секрет NVIDIA_API_KEY (реєстрація email, без картки).
+     "url":  "https://integrate.api.nvidia.com/v1/chat/completions",
+     "key":  os.environ.get("NVIDIA_API_KEY"),
+     "model": "deepseek-ai/deepseek-v4-flash"},
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
