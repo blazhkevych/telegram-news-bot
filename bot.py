@@ -206,6 +206,15 @@ def init_db():
         conn.execute("ALTER TABLE published ADD COLUMN msg_id INTEGER")
     except sqlite3.OperationalError:
         pass  # колонка вже є
+    # posted_title — ФАКТИЧНИЙ заголовок поста в каналі (написаний моделлю).
+    # Потрібен для дедупу: RSS-заголовки різних видань про ту саму подію геть
+    # різні («ППО знешкодила ракету і 69 дронів» vs «Ворог запустив 7 ракет та
+    # 90 БпЛА») — порівняння з ними пропускало дублі. Заголовки ж, які пише
+    # наша модель, для однієї події лексично близькі — по них дубль ловиться.
+    try:
+        conn.execute("ALTER TABLE published ADD COLUMN posted_title TEXT")
+    except sqlite3.OperationalError:
+        pass  # колонка вже є
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_topics (
             keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
@@ -227,10 +236,15 @@ def is_published(conn, url):
     h = hashlib.md5(url.encode()).hexdigest()
     return conn.execute("SELECT 1 FROM published WHERE hash=?", (h,)).fetchone()
 
-def mark_published(conn, url, title, msg_id=None):
+def mark_published(conn, url, title, msg_id=None, posted_title=None):
+    """Позначає URL опублікованим. posted_title — заголовок, який реально
+    вийшов у канал (для дедупу наступних прогонів). Колонки перелічено явно,
+    щоб INSERT не залежав від порядку міграцій ALTER TABLE."""
     h = hashlib.md5(url.encode()).hexdigest()
-    conn.execute("INSERT OR IGNORE INTO published VALUES (?,?,?,?)",
-                 (h, title, datetime.utcnow().isoformat(), msg_id))
+    conn.execute("INSERT OR IGNORE INTO published "
+                 "(hash, title, published_at, msg_id, posted_title) "
+                 "VALUES (?,?,?,?,?)",
+                 (h, title, datetime.utcnow().isoformat(), msg_id, posted_title))
     conn.commit()
 
 def is_skipped(conn, url):
@@ -381,22 +395,30 @@ def is_duplicate_title(conn, title, hours=24, threshold=0.5):
     if not new:
         return False
     since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    # Порівнюємо з ОБОМА заголовками: RSS-овим (title) і тим, що реально
+    # вийшов у канал (posted_title). Канальні заголовки однієї події лексично
+    # близькі між собою — саме по них ловляться дублі, які RSS-заголовки
+    # різних видань маскують різними формулюваннями.
     rows = conn.execute(
-        "SELECT title FROM published WHERE published_at >= ?", (since,)
+        "SELECT title, posted_title FROM published WHERE published_at >= ?",
+        (since,)
     ).fetchall()
-    for (old_title,) in rows:
-        old = _title_words(old_title)
-        if not old:
-            continue
-        # Різні міста — різні події, навіть якщо решта слів збігається
-        # («атакували Одесу» / «атакували Харків» = 0.60): інакше друга
-        # новина мовчки зникала б як «дубль».
-        if _place_conflict(title, old_title):
-            continue
-        inter = len(new & old)
-        union = len(new | old)
-        if union and inter / union >= threshold:
-            return True
+    for row in rows:
+        for old_title in row:
+            if not old_title:
+                continue
+            old = _title_words(old_title)
+            if not old:
+                continue
+            # Різні міста — різні події, навіть якщо решта слів збігається
+            # («атакували Одесу» / «атакували Харків» = 0.60): інакше друга
+            # новина мовчки зникала б як «дубль».
+            if _place_conflict(title, old_title):
+                continue
+            inter = len(new & old)
+            union = len(new | old)
+            if union and inter / union >= threshold:
+                return True
     return False
 
 def ukraine_score(item):
@@ -768,8 +790,12 @@ def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN * 2):
     # LIMIT 60, не 25: канал видає ~300 постів/добу, тож 25 заголовків — це
     # лише ~2 години історії. Ранкові події ставали «невидимими» для курації
     # вже ввечері — саме так 15.07 ті самі новини заходили в канал по 2-3 рази.
+    # COALESCE(posted_title, title): моделі показуємо те, що РЕАЛЬНО вийшло
+    # в канал (заголовок нашого поста), а не RSS-заголовок одного з джерел —
+    # так їй легше впізнати «цю подію ми вже висвітлили».
     rows = conn.execute(
-        "SELECT title FROM published WHERE published_at >= ? "
+        "SELECT COALESCE(posted_title, title) FROM published "
+        "WHERE published_at >= ? "
         "ORDER BY published_at DESC LIMIT 60", (since,)
     ).fetchall()
     published = "\n".join(f"- {r[0][:110]}" for r in rows) or "— (за добу ще нічого)"
@@ -787,6 +813,10 @@ def curate_with_ai(conn, items, max_pick=MAX_POSTS_PER_RUN * 2):
 1. Відкинь кандидата, якщо він про ТУ САМУ подію, що вже опублікована вище —
    навіть якщо формулювання інше або цифри уточнені (напр. «скинули КАБи на
    Сумщину, 17 поранених» і «вдарили КАБами по Сумах, 7 поранених» — це ОДНА подія).
+   ОНОВЛЕННЯ події — теж вона: уточнена кількість збитих цілей чи постраждалих,
+   «атака триває», ранкове зведення про ту саму нічну атаку, реакції на неї.
+   Одна масована атака за ніч = ОДИН пост у каналі, хоч би скільки видань про
+   неї писало і під якими кутами.
 2. Об'єднай в одну групу кандидатів, які пишуть про ОДНУ подію з різних джерел.
 3. Відкинь нецікаве українському читачеві (реклама, дрібні події, гороскопи).
 4. Обери максимум {max_pick} НАЙВАЖЛИВІШИХ подій; найважливіша — першою.
@@ -852,6 +882,12 @@ def merge_group(items, idxs):
             m["extra"].append(it["summary"])
         if not m.get("image_url") and it.get("image_url"):
             m["image_url"] = it["image_url"]
+    # УСІ url/заголовки групи — щоб після публікації позначити опублікованими
+    # КОЖНЕ джерело події, а не лише базове. Без цього URL-и решти джерел
+    # лишалися «новими», і наступний прогін публікував ту саму подію знову з
+    # іншим базовим джерелом (18.07 «7 ракет / 90 дронів» вийшла так 6 разів).
+    m["group"] = [{"url": items[i]["url"], "title": items[i]["title"]}
+                  for i in idxs if items[i].get("url")]
     return m
 
 
@@ -914,8 +950,20 @@ def main():
         msg_id = post_to_telegram(post_text, item["url"], item.get("image_url"),
                                   item.get("sources"))
         if msg_id:
+            # Заголовок, що реально вийшов у канал (перший непорожній рядок
+            # поста) — зберігаємо для дедупу наступних прогонів.
+            headline = next((ln.strip()[:200] for ln in post_text.splitlines()
+                             if ln.strip()), None)
             mark_published(conn, item["url"], item["title"],
-                           msg_id if isinstance(msg_id, int) else None)
+                           msg_id if isinstance(msg_id, int) else None,
+                           posted_title=headline)
+            # Позначаємо опублікованими й РЕШТУ джерел злитої групи: їхні URL
+            # інакше повернулися б кандидатами вже наступного прогону, і та
+            # сама подія вийшла б у канал повторно з іншим базовим джерелом.
+            for g in item.get("group", []):
+                if g["url"] != item["url"]:
+                    mark_published(conn, g["url"], g["title"],
+                                   posted_title=headline)
             count += 1
             time.sleep(3)
 
