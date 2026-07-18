@@ -52,6 +52,22 @@ SPAM_KEYWORDS = [
     "промокод", "affiliate", "sponsored", "advertisement",
 ]
 
+# Збори коштів (рішення власника 18.07: категорично без них). Слово «збір»
+# саме по собі — НЕ маркер (податковий збір, збір урожаю, збірна) — ловимо
+# лише однозначні словосполучення і платіжні реквізити.
+FUNDRAISER_MARKERS = [
+    "send.monobank", "monobank.ua/jar", "банка monobank", "банку monobank",
+    "збір на ", "збір коштів", "збору коштів", "оголосив збір", "оголосили збір",
+    "оголошує збір", "відкрив збір", "відкрито збір", "відкриває збір",
+    "запускає збір", "запустив збір", "закрити збір", "закриття збору",
+    "долучитися до збору", "долучитись до збору", "задонать", "задонатити",
+    "реквізити для допомоги", "власкор збирає", "збирає кошти", "збирають кошти",
+]
+
+def is_fundraiser(title, summary):
+    text = (title + " " + (summary or "")).lower()
+    return any(m in text for m in FUNDRAISER_MARKERS)
+
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
@@ -576,6 +592,10 @@ def fetch_news(conn):
                     continue
                 if is_spam(title, summary):
                     continue
+                if is_fundraiser(title, summary):
+                    print(f"🚫 Збір коштів: {title[:50]}")
+                    mark_skipped(conn, url, title, "fundraiser")
+                    continue
                 if is_russian(title, summary):
                     print(f"🚫 Російська: {title[:50]}")
                     continue
@@ -712,6 +732,8 @@ def rewrite_with_ai(item, save_strong=False):
 Новину вже відібрав редактор — вона ВАЖЛИВА, тож твоє завдання її написати.
 SKIP відповідай лише у крайньому разі:
 - відверта реклама/спам;
+- ЗБІР КОШТІВ: новина закликає донатити чи містить реквізити (банка monobank,
+  номер картки, PayPal) — канал такого не публікує, завжди SKIP;
 - у тексті взагалі немає про що писати;
 - ТИЗЕР БЕЗ СУТІ: заголовок обіцяє відповідь («відповіли на чутки»,
   «пояснили, чи…», «назвали причину», «стало відомо…»), а САМОЇ відповіді
