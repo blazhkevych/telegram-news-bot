@@ -529,6 +529,40 @@ def merge_by_event(items, threshold=0.5):
     return merged
 
 
+def resolve_gnews_url(url):
+    """Розгортає redirect-посилання Google News (news.google.com/rss/articles/…)
+    до прямого URL статті. Це дає: чесне посилання для читача, робочий
+    fetch_article_text (заглушку Google він читати не вміє) і дедуп за
+    реальним URL. Новий формат Google не декодується офлайн, тому пробуємо
+    HTTP: 1) редірект; 2) адреса в HTML заглушки. Не вийшло — None,
+    і далі все працює зі старим GN-посиланням (як раніше)."""
+    try:
+        r = requests.get(url, headers={"User-Agent": FEED_UA},
+                         timeout=10, allow_redirects=True)
+        if "news.google.com" not in r.url:
+            return r.url
+        # Заглушка: реальна адреса буває в data-n-au або першому <a> не на Google
+        m = re.search(r'data-n-au="([^"]+)"', r.text or "")
+        if m:
+            return html.unescape(m.group(1))
+        for href in re.findall(r'<a[^>]+href="(https?://[^"]+)"', r.text or ""):
+            if "google.com" not in href and "gstatic.com" not in href:
+                return html.unescape(href)
+    except Exception as e:
+        print(f"⚠️ resolve_gnews: {str(e)[:60]}")
+    return None
+
+
+# Колонки думок — не новини. 18.07 колонка NV /opinion/ вийшла в канал як
+# факт («Зеленський звільнив міністра оборони Федорова») — суміш оцінок
+# автора з подіями. Канал обіцяє «перевірені факти», тому opinion відсікаємо.
+OPINION_MARKERS = ("/opinion/", "/opinion-", "/blogs/", "/blog/",
+                   "/columns/", "/dumka/", "/dumky/", "/publications/authors/")
+
+def is_opinion_url(url):
+    return any(m in (url or "").lower() for m in OPINION_MARKERS)
+
+
 def fetch_news(conn):
     items = []
     for feed_cfg in RSS_FEEDS:
@@ -545,14 +579,32 @@ def fetch_news(conn):
                 if is_russian(title, summary):
                     print(f"🚫 Російська: {title[:50]}")
                     continue
+                # Явна назва бренду; feed.title — лише запасний варіант
+                source = feed_cfg.get("name") or feed.feed.get("title", "")
+                if "news.google.com" in url:
+                    # Справжнє видання лежить у тегу <source> запису — без
+                    # нього пост показував джерело «Google News» (4336/4340).
+                    gsrc = getattr(entry, "source", None) or {}
+                    source = gsrc.get("title") or source
+                    # Пробуємо розгорнути redirect до прямої адреси статті.
+                    real = resolve_gnews_url(url)
+                    if real:
+                        url = real
+                        # Повторна перевірка вже за ПРЯМИМ URL: ту саму статтю
+                        # ми могли опублікувати з власного фіду видання.
+                        if is_published(conn, url) or is_skipped(conn, url):
+                            continue
+                if is_opinion_url(url):
+                    print(f"🚫 Колонка думок: {title[:50]}")
+                    mark_skipped(conn, url, title, "opinion")
+                    continue
                 keywords = extract_keywords(title)
                 update_topic_count(conn, keywords)
                 items.append({
                     "title":     title,
                     "summary":   summary,
                     "url":       url,
-                    # Явна назва бренду; feed.title — лише запасний варіант
-                    "source":    feed_cfg.get("name") or feed.feed.get("title", ""),
+                    "source":    source,
                     "lang":      feed_cfg["lang"],
                     "keywords":  keywords,
                     "image_url": extract_image(entry),
