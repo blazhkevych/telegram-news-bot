@@ -442,6 +442,56 @@ def is_duplicate_title(conn, title, hours=24, threshold=0.5):
                 return True
     return False
 
+def is_semantic_duplicate(conn, headline, hours=24, limit=60):
+    """Семантичний дедуп ФАКТИЧНОГО заголовка поста проти опублікованого за добу.
+
+    Навіщо (бойова перевірка 19.07): URL-дедуп блокує лише джерела, ВЖЕ злиті
+    в групу на момент публікації. Коли інше видання пише про ту саму подію в
+    наступному прогоні, його URL у БД відсутній, а заголовок лексично інший
+    (Жаккар < 0.5) — і подія виходила в канал повторно (Wildberries ×6, поїзд
+    на Запоріжжі ×4 за 45 хв). Правило в загальному промпті курації системно
+    не тримає, тому — окремий МАЛЕНЬКИЙ виклик з єдиним завданням «дубль чи ні».
+
+    Fail-open: якщо LLM недоступний (429) чи відповів сміттям — вважаємо НЕ
+    дублем: краще зрідка пропустити повтор, ніж мовчки губити новини. Виклик
+    дешевий (~1,2 тис. токенів) і йде з save_strong=True — спершу на резервні
+    провайдери, добовий ліміт сильної моделі не чіпає."""
+    if not headline:
+        return False
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    rows = conn.execute(
+        "SELECT COALESCE(posted_title, title) FROM published "
+        "WHERE published_at >= ? ORDER BY published_at DESC LIMIT ?",
+        (since, limit)).fetchall()
+    if not rows:
+        return False
+    published = "\n".join(f"{i+1}. {r[0][:110]}" for i, r in enumerate(rows))
+    prompt = f"""Опубліковані за останню добу заголовки новинного каналу:
+{published}
+
+Новий заголовок-кандидат:
+{headline[:200]}
+
+Чи повідомляє кандидат про ТУ САМУ подію, що якийсь із опублікованих заголовків?
+ТА САМА подія — це й ОНОВЛЕННЯ: уточнені цифри жертв чи збитих цілей, «атака
+триває», зведення або реакції про ту саму атаку/заяву/подію.
+РІЗНІ міста — завжди РІЗНІ події. Дві незалежні події в одному місті — теж різні.
+
+Відповідай ЛИШЕ одним рядком без пояснень:
+ДУБЛЬ <номер опублікованого заголовка> — якщо та сама подія
+ОК — якщо подія нова"""
+    raw = call_llm(prompt, max_tokens=1200, temperature=0.0, save_strong=True)
+    if not raw or raw == "RATE_LIMIT":
+        return False  # fail-open: перевірити не вдалося — публікуємо як раніше
+    verdict = raw.strip().upper()
+    if verdict.startswith("ДУБЛЬ") or verdict.startswith("DUP"):
+        m = re.search(r"\d+", raw)
+        idx = int(m.group()) - 1 if m else -1
+        matched = rows[idx][0] if 0 <= idx < len(rows) else "?"
+        print(f"⏭ Семантичний дубль: «{headline[:60]}» ≈ «{matched[:60]}»")
+        return True
+    return False
+
 def ukraine_score(item):
     """Оцінка «наскільки це про Україну» — щоб такі новини йшли першими."""
     text  = (item["title"] + " " + item["summary"]).lower()
@@ -1045,13 +1095,32 @@ def main():
             skipped_cnt += 1
             continue
 
+        # Заголовок, який піде в канал (перший непорожній рядок поста).
+        headline = next((ln.strip()[:200] for ln in post_text.splitlines()
+                         if ln.strip()), None)
+
+        # Дедуп по ЗГЕНЕРОВАНОМУ заголовку — ДО публікації. Бойова перевірка
+        # 19.07 показала: перевірки RSS-заголовка недостатньо — різні видання
+        # формулюють одну подію по-різному (Жаккар < 0.5), і подія виходила
+        # повторно (Wildberries ×6, поїзд на Запоріжжі ×4). Заголовки ж НАШОЇ
+        # моделі для однієї події близькі. Два шари: безкоштовний лексичний,
+        # а якщо він мовчить — семантичний LLM (бачить перефрази).
+        if headline and (is_duplicate_title(conn, headline)
+                         or is_semantic_duplicate(conn, headline)):
+            print(f"⏭ Дубль події (по заголовку поста): {headline[:50]}")
+            # Скіпаємо ВСЮ злиту групу: інакше її URL-и повернуться
+            # кандидатами наступного прогону і знову спалять виклики LLM.
+            mark_skipped(conn, item["url"], item["title"], "duplicate_event")
+            for g in item.get("group", []):
+                if g["url"] != item["url"]:
+                    mark_skipped(conn, g["url"], g["title"], "duplicate_event")
+            continue
+
         msg_id = post_to_telegram(post_text, item["url"], item.get("image_url"),
                                   item.get("sources"))
         if msg_id:
-            # Заголовок, що реально вийшов у канал (перший непорожній рядок
-            # поста) — зберігаємо для дедупу наступних прогонів.
-            headline = next((ln.strip()[:200] for ln in post_text.splitlines()
-                             if ln.strip()), None)
+            # headline зберігаємо в published.posted_title — по ньому
+            # працюватиме дедуп наступних прогонів.
             mark_published(conn, item["url"], item["title"],
                            msg_id if isinstance(msg_id, int) else None,
                            posted_title=headline)
