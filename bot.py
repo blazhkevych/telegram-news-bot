@@ -968,25 +968,68 @@ def format_post_html(text, url, sources=None):
     return f"{body}\n\n📰 <i>За даними: {', '.join(links)}</i>"
 
 
+# ---------------------------------------------------------------------------
+# НІЧНИЙ РЕЖИМ: пости без звукового сповіщення
+# ---------------------------------------------------------------------------
+# Канал видає ~270 постів на добу — це пінг раз на ~5 хвилин, і вночі теж.
+# Для підписника це головна причина натиснути «вимкнути сповіщення» назавжди,
+# а мовчазний канал = мертві покази реклами. Зрілі новинні канали роблять інакше:
+# вночі пост ВИХОДИТЬ, але без звуку — Telegram уміє це параметром
+# disable_notification. Новина нікуди не зникає і нічим не відрізняється: вона
+# одразу видима в списку чатів з лічильником непрочитаних, просто не будить
+# телефон о 3-й ночі.
+#
+# Свідомий компроміс: вночі бувають і критичні новини (масована атака). Цей
+# канал — новинний агрегатор, а не система оповіщення; для тривог у людей є
+# спеціальні боти. Якщо власник вирішить інакше — досить змінити два числа нижче
+# (наприклад, QUIET_FROM_HOUR = QUIET_TO_HOUR = 0 повністю вимкне тихий режим).
+QUIET_FROM_HOUR = 23   # з 23:00 включно — тихо
+QUIET_TO_HOUR   = 7    # до 07:00 — о 07:00 звук уже вмикається
+
+
+def is_quiet_hour():
+    """Чи зараз «тиха» година за київським часом (True = постити без звуку).
+
+    Будь-який збій із часовою зоною трактуємо як «день» (зі звуком) — тобто
+    як поведінку, що була до цієї зміни. Публікація важливіша за тихий режим.
+    """
+    try:
+        import pytz
+        hour = datetime.now(pytz.timezone("Europe/Kiev")).hour
+    except Exception as e:
+        print(f"⚠️ Не вдалося визначити київську годину ({e}) — постимо зі звуком")
+        return False
+
+    if QUIET_FROM_HOUR == QUIET_TO_HOUR:
+        return False                      # тихий режим вимкнено
+    if QUIET_FROM_HOUR < QUIET_TO_HOUR:
+        return QUIET_FROM_HOUR <= hour < QUIET_TO_HOUR
+    # Вікно переходить через північ (23 -> 7): це два відрізки доби.
+    return hour >= QUIET_FROM_HOUR or hour < QUIET_TO_HOUR
+
+
 def post_to_telegram(text, url, image_url=None, sources=None):
     full_text   = format_post_html(text, url, sources)
     valid_image = image_url and is_valid_image(image_url)
+    quiet       = is_quiet_hour()   # вночі — без звуку, див. is_quiet_hour()
 
     if valid_image:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
             json={"chat_id": CHANNEL_ID, "photo": image_url,
-                  "caption": full_text, "parse_mode": "HTML"}
+                  "caption": full_text, "parse_mode": "HTML",
+                  "disable_notification": quiet}
         )
     else:
         response = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": CHANNEL_ID, "text": full_text,
-                  "parse_mode": "HTML", "disable_web_page_preview": False}
+                  "parse_mode": "HTML", "disable_web_page_preview": False,
+                  "disable_notification": quiet}
         )
 
     if response.status_code == 200:
-        print(f"✅ {'🖼' if valid_image else '📝'} {url}")
+        print(f"✅ {'🖼' if valid_image else '📝'}{' 🔕' if quiet else ''} {url}")
         # message_id потрібен дайджесту для прямого посилання на пост.
         try:
             return response.json()["result"]["message_id"]
