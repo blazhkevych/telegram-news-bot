@@ -250,6 +250,16 @@ def init_db():
         conn.execute("ALTER TABLE published ADD COLUMN posted_title TEXT")
     except sqlite3.OperationalError:
         pass  # колонка вже є
+    # source — назви видань, на які пост посилається в рядку «📰 За даними».
+    # Навіщо: без цієї колонки питання «чи всі 28 джерел доходять до каналу»
+    # неможливо поставити до бази — у сесії 16 відповідь довелося знімати
+    # парсингом публічної сторінки Telegram по 160 постах. Тепер це один SQL.
+    # Для злитої групи пишемо ОСНОВНЕ джерело першим, решту через кому —
+    # рівно те, що читач бачить у підписі поста.
+    try:
+        conn.execute("ALTER TABLE published ADD COLUMN source TEXT")
+    except sqlite3.OperationalError:
+        pass  # колонка вже є
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_topics (
             keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
@@ -271,16 +281,72 @@ def is_published(conn, url):
     h = hashlib.md5(url.encode()).hexdigest()
     return conn.execute("SELECT 1 FROM published WHERE hash=?", (h,)).fetchone()
 
-def mark_published(conn, url, title, msg_id=None, posted_title=None):
+def mark_published(conn, url, title, msg_id=None, posted_title=None, source=None):
     """Позначає URL опублікованим. posted_title — заголовок, який реально
-    вийшов у канал (для дедупу наступних прогонів). Колонки перелічено явно,
-    щоб INSERT не залежав від порядку міграцій ALTER TABLE."""
+    вийшов у канал (для дедупу наступних прогонів). source — видання з підпису
+    «За даними». Колонки перелічено явно, щоб INSERT не залежав від порядку
+    міграцій ALTER TABLE."""
     h = hashlib.md5(url.encode()).hexdigest()
     conn.execute("INSERT OR IGNORE INTO published "
-                 "(hash, title, published_at, msg_id, posted_title) "
-                 "VALUES (?,?,?,?,?)",
-                 (h, title, datetime.utcnow().isoformat(), msg_id, posted_title))
+                 "(hash, title, published_at, msg_id, posted_title, source) "
+                 "VALUES (?,?,?,?,?,?)",
+                 (h, title, datetime.utcnow().isoformat(), msg_id, posted_title,
+                  source))
     conn.commit()
+
+
+def sources_label(item):
+    """Рядок для published.source: основне джерело першим, решта через кому.
+
+    Береться з item["sources"] — того самого списку, який format_post_html
+    показує читачеві в «📰 За даними». Тобто в базі опиняється рівно те, що
+    вийшло в канал, а не здогад. Порядок збережено, повтори прибрано."""
+    names = [s.get("name") for s in (item.get("sources") or []) if s.get("name")]
+    if not names and item.get("source"):
+        names = [item["source"]]
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return ", ".join(out) or None
+
+
+def source_report(conn, days=7):
+    """Скільки постів у каналі дало кожне джерело за N діб.
+
+    Навіщо: у сесії 16 на це питання довелося відповідати парсингом публічної
+    сторінки Telegram по 160 постах — база джерела не зберігала. Тепер це один
+    запит. Рахуємо ЛИШЕ рядки з msg_id — те, що реально вийшло в канал;
+    рядки злитих груп без msg_id це «з'їдені» дублі, а не пости.
+    Пост із кількох джерел («за даними X, Y») зараховується КОЖНОМУ з них —
+    саме так читач і бачить підпис."""
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT source FROM published "
+        "WHERE published_at >= ? AND msg_id IS NOT NULL", (since,)
+    ).fetchall()
+    counts, no_source = {}, 0
+    for (src,) in rows:
+        if not src:
+            no_source += 1        # пости до появи колонки — чесно показуємо окремо
+            continue
+        for name in (n.strip() for n in src.split(",")):
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+    lines = [f"📊 Джерела за {days} діб: {len(rows)} постів у каналі"]
+    if no_source:
+        lines.append(f"(з них {no_source} без запису джерела — до міграції)")
+    for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        lines.append(f"  {n:>4}  {name}")
+    # Джерела зі списку, які за цей час не дали НІЧОГО. «Google News» тут
+    # з'являтиметься завжди й це нормально: його бренд підмінюється справжнім
+    # виданням із тегу <source>, тобто під своїм ім'ям він публікуватись і не
+    # може (див. аудит сесії 16).
+    silent = [f["name"] for f in RSS_FEEDS if f["name"] not in counts]
+    if silent:
+        lines.append(f"🔇 Мовчали ({len(silent)}): " + ", ".join(silent))
+    return "\n".join(lines)
 
 def is_skipped(conn, url):
     h = hashlib.md5(url.encode()).hexdigest()
@@ -1167,7 +1233,12 @@ def merge_group(items, idxs):
     # КОЖНЕ джерело події, а не лише базове. Без цього URL-и решти джерел
     # лишалися «новими», і наступний прогін публікував ту саму подію знову з
     # іншим базовим джерелом (18.07 «7 ракет / 90 дронів» вийшла так 6 разів).
-    m["group"] = [{"url": items[i]["url"], "title": items[i]["title"]}
+    # "source" тут — джерело САМЕ цього рядка групи, а не всієї події: у
+    # published кожен URL має записатись зі своїм виданням, інакше звіт по
+    # джерелах порахував би основне джерело стільки разів, скільки в групі
+    # учасників.
+    m["group"] = [{"url": items[i]["url"], "title": items[i]["title"],
+                   "source": items[i].get("source")}
                   for i in idxs if items[i].get("url")]
     return m
 
@@ -1349,14 +1420,16 @@ def main():
             # працюватиме дедуп наступних прогонів.
             mark_published(conn, item["url"], item["title"],
                            msg_id if isinstance(msg_id, int) else None,
-                           posted_title=headline)
+                           posted_title=headline,
+                           source=sources_label(item))
             # Позначаємо опублікованими й РЕШТУ джерел злитої групи: їхні URL
             # інакше повернулися б кандидатами вже наступного прогону, і та
             # сама подія вийшла б у канал повторно з іншим базовим джерелом.
             for g in item.get("group", []):
                 if g["url"] != item["url"]:
                     mark_published(conn, g["url"], g["title"],
-                                   posted_title=headline)
+                                   posted_title=headline,
+                                   source=g.get("source"))
             count += 1
             time.sleep(3)
 
