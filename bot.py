@@ -714,6 +714,37 @@ def resolve_gnews_url(url):
     return None
 
 
+# Один бренд — один підпис. Google News у тегу <source> віддає то бренд, то
+# домен, то бренд із хвостом рубрики, і в каналі це вилазило як різні джерела:
+# за 276 постів 33 різні підписи, з них «nv.ua» проти «NV», «radiosvoboda.org»
+# проти «Радіо Свобода», «AP News» проти «AP», «Суспільне | Новини» проти
+# «Суспільне». Читачеві це виглядає неохайно, а звіт source_report через це
+# ділить одне видання надвоє і показує його ж у списку «мовчали».
+SOURCE_ALIASES = {
+    "nv.ua": "NV", "tsn.ua": "ТСН", "pravda.com.ua": "Українська правда",
+    "suspilne.media": "Суспільне", "ukrinform.ua": "Укрінформ",
+    "censor.net": "Цензор.НЕТ", "unian.ua": "УНІАН", "unian.net": "УНІАН",
+    "radiosvoboda.org": "Радіо Свобода", "dw.com": "DW",
+    "fakty.com.ua": "Факти ICTV", "militarnyi.com": "Мілітарний",
+    "apnews.com": "AP", "ap news": "AP", "reuters.com": "Reuters",
+    "eurointegration.com.ua": "Європейська правда",
+    "armyinform.com.ua": "АрміяInform", "bihus.info": "Бігус.Інфо",
+}
+
+
+def normalize_source(name):
+    """Зводить підпис джерела до канонічного бренду.
+
+    Спершу відрізаємо хвіст рубрики («Суспільне | Новини» → «Суспільне»), потім
+    шукаємо в SOURCE_ALIASES без урахування регістру. Невідоме ім'я лишаємо як
+    є: краще показати незнайомий бренд, ніж загубити атрибуцію."""
+    name = (name or "").strip()
+    if not name:
+        return name
+    name = name.split(" | ")[0].strip() or name
+    return SOURCE_ALIASES.get(name.lower(), name)
+
+
 # Колонки думок — не новини. 18.07 колонка NV /opinion/ вийшла в канал як
 # факт («Зеленський звільнив міністра оборони Федорова») — суміш оцінок
 # автора з подіями. Канал обіцяє «перевірені факти», тому opinion відсікаємо.
@@ -761,6 +792,9 @@ def fetch_news(conn):
                         # ми могли опублікувати з власного фіду видання.
                         if is_published(conn, url) or is_skipped(conn, url):
                             continue
+                # Один бренд — один підпис (див. normalize_source): Google News
+                # віддає то «NV», то «nv.ua», і в каналі це були різні джерела.
+                source = normalize_source(source)
                 if is_opinion_url(url):
                     print(f"🚫 Колонка думок: {title[:50]}")
                     mark_skipped(conn, url, title, "opinion")
