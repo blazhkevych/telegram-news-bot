@@ -1025,7 +1025,7 @@ def is_bad_output(text):
     return None
 
 
-def format_post_html(text, url, sources=None):
+def format_post_html(text, url, sources=None, badge=True):
     """Стиль NV для parse_mode=HTML: перший (непорожній) рядок — жирний
     заголовок, решта абзаців — як є. Екрануємо <, >, & у ВСЬОМУ тексті
     новини, щоб сирі символи не ламали HTML-розмітку Telegram (у Markdown
@@ -1044,18 +1044,44 @@ def format_post_html(text, url, sources=None):
         parts.append(f"<b>{esc}</b>" if i == head_idx else esc)
     body = "\n".join(parts).strip()
 
-    links = []
+    links, checkable = [], 0
     for s in (sources or [])[:4]:
         name, href = (s.get("name"), s.get("url")) if isinstance(s, dict) else (s, None)
         if not name:
             continue
         name_esc = html.escape(name)
+        if href:
+            checkable += 1
         links.append(f'<a href="{html.escape(href, quote=True)}">{name_esc}</a>'
                      if href else name_esc)
     if not links:
         # Запобіжник: без джерел пост лишиться зовсім без посилання на статтю.
         links = [f'<a href="{html.escape(url, quote=True)}">Читати повністю</a>']
-    return f"{body}\n\n📰 <i>За даними: {', '.join(links)}</i>"
+        return f"{body}\n\n📰 <i>За даними: {', '.join(links)}</i>"
+
+    # ✅ Знак довіри (GROWTH.md 5.1). Це структурна перевага, якої немає в
+    # каналу з редакцією: бот читає 28 стрічок одночасно і знає, скільки видань
+    # написали про ту саму подію. Цифра НЕ вигадується — це рівно ті джерела,
+    # що перелічені нижче й клікабельні, тож читач може перевірити кожне.
+    # Рахуємо саме ті джерела, які показані Й КЛІКАБЕЛЬНІ (а не весь
+    # merge-список): краще недорахувати, ніж заявити «5 джерел» і дати
+    # перевірити чотири. Одне джерело значка не отримує — «підтверджено
+    # 1 джерелом» це не підтвердження, а просто джерело, і воно вже рядком нижче.
+    # badge=False — коли рядок не влазить у ліміт підпису до фото (див.
+    # post_to_telegram). Втратити знак довіри неприємно, втратити пост гірше.
+    mark = (f"✅ <b>Підтверджено {checkable} джерелами</b>\n"
+            if badge and checkable >= 2 else "")
+    return f"{body}\n\n{mark}📰 <i>За даними: {', '.join(links)}</i>"
+
+
+# Ліміт підпису до фото в Telegram. Для звичайного повідомлення ліміт 4096 —
+# туди значок влазить завжди, тому перевірка потрібна лише для sendPhoto.
+TG_CAPTION_LIMIT = 1024
+
+
+def visible_len(html_text):
+    """Довжина так, як її рахує Telegram: розмітка в ліміт не входить."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", html_text)))
 
 
 # ---------------------------------------------------------------------------
@@ -1102,6 +1128,23 @@ def post_to_telegram(text, url, image_url=None, sources=None):
     full_text   = format_post_html(text, url, sources)
     valid_image = image_url and is_valid_image(image_url)
     quiet       = is_quiet_hour()   # вночі — без звуку, див. is_quiet_hour()
+
+    # Значок «✅ Підтверджено N джерелами» додає ~28 символів, а підпис до фото
+    # Telegram ріже на 1024 — перевищення це не обрізаний підпис, а ПОМИЛКА
+    # запиту, тобто втрачений пост. Виміряно 08.08 по 139 постах із фото:
+    # найдовший 1023 символи, 11 постів у зоні 996+. Тому для фото значок
+    # ставимо лише якщо він влазить; текстовим постам (ліміт 4096) нічого не
+    # загрожує.
+    if valid_image and visible_len(full_text) > TG_CAPTION_LIMIT:
+        full_text = format_post_html(text, url, sources, badge=False)
+        if visible_len(full_text) > TG_CAPTION_LIMIT:
+            # Не влазить навіть без значка. Раніше такий пост просто ГИНУВ:
+            # sendPhoto повертав помилку, post_to_telegram — False, новина не
+            # виходила взагалі. Тепер публікуємо її текстом (ліміт 4096) —
+            # втрачаємо картинку, але не новину. Значок повертаємо: у
+            # текстовому пості місця вистачає.
+            full_text, valid_image = format_post_html(text, url, sources), False
+            print("🖼→📝 Підпис довший за 1024 — пост іде без картинки")
 
     if valid_image:
         response = requests.post(
