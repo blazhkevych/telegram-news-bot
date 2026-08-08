@@ -6,6 +6,7 @@ import feedparser
 import requests
 import time
 import re
+import calendar
 from datetime import datetime, timedelta
 
 # "name" — назва бренду для підпису «📰 За даними: ...». Задана ЯВНО, бо
@@ -270,11 +271,21 @@ def init_db():
         conn.execute("ALTER TABLE published ADD COLUMN source TEXT")
     except sqlite3.OperationalError:
         pass  # колонка вже є
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS seen_topics (
-            keyword TEXT PRIMARY KEY, count INTEGER DEFAULT 1, first_seen TEXT
-        )
-    """)
+    # seen_topics БІЛЬШЕ НЕ ІСНУЄ (БАГ-014). Таблиця мала міряти «трендовість»
+    # теми, а насправді міряла, скільки прогонів новина провисіла у стрічці:
+    # лічильник ріс для КОЖНОГО кандидата на КОЖНОМУ прогоні, тож найвищий бал
+    # отримувало найлежаліше. Тепер «підтвердженість» береться з кількості
+    # РІЗНИХ ДЖЕРЕЛ у злитій групі — це вже рахує merge_by_event, і це саме те,
+    # що ми й хотіли міряти. Прибирання одноразове й ідемпотентне: після DROP
+    # таблиці немає, наступний прогін сюди не заходить. VACUUM — щоб 71 тисяча
+    # рядків реально пішла з файла, який комітиться в публічний репозиторій
+    # (урок сесії 17: DROP звільняє сторінки, але не витирає байти).
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='seen_topics'").fetchone():
+        conn.execute("DROP TABLE seen_topics")
+        conn.commit()
+        conn.execute("VACUUM")
+        print("🧹 seen_topics прибрано (БАГ-014)")
     # Новини, які модель відхилила (SKIP) або які визнано дублем. БЕЗ цієї
     # таблиці кожен наступний прогін (кожні ~15 хв) ганяв ТІ САМІ новини через
     # LLM, знову діставав SKIP і марно палив добові ліміти всіх провайдерів
@@ -369,31 +380,31 @@ def mark_skipped(conn, url, title, reason):
                  (h, title, reason, datetime.utcnow().isoformat()))
     conn.commit()
 
-def get_topic_count(conn, keywords):
-    max_count = 0
-    for kw in keywords:
-        row = conn.execute(
-            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
-        ).fetchone()
-        if row:
-            max_count = max(max_count, row[0])
-    return max_count
+def source_count(item):
+    """Скільки РІЗНИХ видань написали про цю подію.
 
-def update_topic_count(conn, keywords):
-    for kw in keywords:
-        existing = conn.execute(
-            "SELECT count FROM seen_topics WHERE keyword=?", (kw,)
-        ).fetchone()
-        if existing:
-            conn.execute("UPDATE seen_topics SET count=count+1 WHERE keyword=?", (kw,))
-        else:
-            conn.execute("INSERT INTO seen_topics VALUES (?,1,?)",
-                         (kw, datetime.utcnow().isoformat()))
-    conn.commit()
+    Замінив собою get_topic_count у сортуванні кандидатів (БАГ-014). Старий
+    лічильник міряв, скільки прогонів новина провисіла у стрічці, тобто
+    піднімав нагору найлежаліше. Кількість джерел — це те, що ми й хотіли
+    міряти під словом «трендовість»: подія, про яку написали чотири видання,
+    важливіша за ту, про яку написало одне. Її ж читач бачить у пості як
+    «✅ Підтверджено N джерелами», тобто відбір і обіцянка каналу тепер
+    говорять одне й те саме."""
+    return len(item.get("sources") or []) or 1
 
-def extract_keywords(title):
-    words = title.lower().split()
-    return [w.strip(".,!?«»\"'") for w in words if len(w) > 5]
+
+def entry_ts(entry):
+    """Час публікації запису (секунди UTC). Немає дати — 0, тобто за рівних
+    інших ключів такий запис іде в кінець, а не наперед."""
+    for attr in ("published_parsed", "updated_parsed"):
+        parsed = getattr(entry, attr, None)
+        if parsed:
+            try:
+                return calendar.timegm(parsed)
+            except Exception:
+                pass
+    return 0
+
 
 def is_spam(title, summary):
     text = (title + " " + summary).lower()
@@ -671,6 +682,9 @@ def merge_by_event(items, threshold=0.5):
                     m["sources"].append({"name": it["source"], "url": it["url"]})
                 if it.get("summary"):
                     m["extra"].append(it["summary"])
+                # Свіжість групи — за найновішим її учасником: подія настільки
+                # свіжа, наскільки свіже найпізніше повідомлення про неї.
+                m["ts"] = max(m.get("ts") or 0, it.get("ts") or 0)
                 # основою лишаємо найінформативніший варіант
                 if len(it.get("summary") or "") > len(m.get("summary") or ""):
                     m["title"], m["summary"], m["url"] = it["title"], it["summary"], it["url"]
@@ -799,16 +813,17 @@ def fetch_news(conn):
                     print(f"🚫 Колонка думок: {title[:50]}")
                     mark_skipped(conn, url, title, "opinion")
                     continue
-                keywords = extract_keywords(title)
-                update_topic_count(conn, keywords)
                 items.append({
                     "title":     title,
                     "summary":   summary,
                     "url":       url,
                     "source":    source,
                     "lang":      feed_cfg["lang"],
-                    "keywords":  keywords,
                     "image_url": extract_image(entry),
+                    # Час публікації — третій ключ сортування: за рівної
+                    # підтвердженості вище має бути свіжіше, бо канал обіцяє
+                    # новини «в реальному часі».
+                    "ts":        entry_ts(entry),
                 })
         except Exception as e:
             print(f"⚠️ {feed_cfg['url']}: {e}")
@@ -817,8 +832,14 @@ def fetch_news(conn):
     items  = merge_by_event(items)
     if before != len(items):
         print(f"🔗 Злито за подіями: {before} → {len(items)} кандидатів")
-    # Спершу — новини про Україну, потім — за «трендовістю» (частота теми)
-    items.sort(key=lambda x: (ukraine_score(x), get_topic_count(conn, x["keywords"])),
+    # Спершу — новини про Україну, потім — за ПІДТВЕРДЖЕНІСТЮ (скільки різних
+    # видань написали про подію), потім — за свіжістю. Другий ключ раніше був
+    # get_topic_count, який насправді міряв, скільки прогонів новина провисіла
+    # у стрічці, тобто піднімав нагору найлежаліше (БАГ-014). Заміряно 08.08 на
+    # живому прогоні: подія, підтверджена ЧОТИРМА джерелами, стояла 13-ю з 52 в
+    # українському кошику, який бере 9 — тобто найкраще підтверджена новина
+    # прогону вилітала, а одноджерельні виходили в канал.
+    items.sort(key=lambda x: (ukraine_score(x), source_count(x), x.get("ts") or 0),
                reverse=True)
     # Резервуємо місця світовим новинам. Без цього ukraine_score (бал за кожне
     # українське/воєнне слово) виштовхував англомовні джерела — BBC, Guardian,
@@ -1316,6 +1337,7 @@ def merge_group(items, idxs):
             m["extra"].append(it["summary"])
         if not m.get("image_url") and it.get("image_url"):
             m["image_url"] = it["image_url"]
+        m["ts"] = max(m.get("ts") or 0, it.get("ts") or 0)
     # УСІ url/заголовки групи — щоб після публікації позначити опублікованими
     # КОЖНЕ джерело події, а не лише базове. Без цього URL-и решти джерел
     # лишалися «новими», і наступний прогін публікував ту саму подію знову з
