@@ -7,9 +7,33 @@ from bot import call_llm   # той самий ланцюг провайдері
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
+# Публічний username каналу — ОКРЕМО від адреси, куди бот постить.
+# Навіщо: CHANNEL_ID може бути числовим (-100…), і числовий id НІКОЛИ не
+# змінюється — навіть якщо ми поміняємо публічне посилання каналу. Раніше
+# username вигрібався прямо з CHANNEL_ID, тому зміна посилання в Telegram
+# клала публікацію повністю (бот стукав у неіснуючий @старий_нік).
+# Змінна необов'язкова: якщо її не задати, поведінка така сама, як була.
+CHANNEL_USERNAME = os.environ.get("TELEGRAM_CHANNEL_USERNAME", "")
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 DB_PATH        = "published.db"
 DIGEST_TYPE    = os.environ.get("DIGEST_TYPE", "morning")
+
+def resolve_username(channel_id, explicit=""):
+    """Звідки брати ім'я каналу для посилань t.me/<ім'я>/<номер поста>.
+
+    Пріоритет:
+      1) явна змінна TELEGRAM_CHANNEL_USERNAME (працює і з числовим CHANNEL_ID);
+      2) старий спосіб — CHANNEL_ID у вигляді "@ім'я";
+      3) None — тоді дайджест просто не додає посилань (як і раніше).
+    """
+    explicit = (explicit or "").strip().lstrip("@")
+    if explicit:
+        return explicit
+    cid = str(channel_id or "").strip()
+    if cid.startswith("@"):
+        return cid.lstrip("@") or None
+    return None
+
 
 CITIES = [
     # Підконтрольні території
@@ -183,8 +207,8 @@ def evening_digest():
     if not raw or raw == "RATE_LIMIT":
         return "🌙 Підсумки дня від UA News незабаром.", None
 
-    # Публічний канал: CHANNEL_ID = "@username" → лінк t.me/username/msg_id
-    username = CHANNEL_ID.lstrip("@") if str(CHANNEL_ID).startswith("@") else None
+    # Ім'я каналу для посилань t.me/<ім'я>/<номер> — див. resolve_username()
+    username = resolve_username(CHANNEL_ID, CHANNEL_USERNAME)
     items, used = [], set()
     for line in raw.strip().splitlines():
         if "|" not in line:

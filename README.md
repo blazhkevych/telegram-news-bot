@@ -2,9 +2,9 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Telegram](https://img.shields.io/badge/Channel-UA%20News-blue)](https://t.me/ua_news_channel)
+[![Telegram](https://img.shields.io/badge/Channel-UA%20News-blue)](https://t.me/novyny_ua_svit)
 
-Telegram-бот для автоматичного збору новин з RSS-каналів українських та світових медіа, фільтрації за релевантністю та публікації в каналі [UA News](https://t.me/ua_news_channel).
+Telegram-бот для автоматичного збору новин з RSS-каналів українських та світових медіа, фільтрації за релевантністю та публікації в каналі [UA News](https://t.me/novyny_ua_svit).
 
 ## Особливості
 
@@ -78,7 +78,7 @@ docker run -d --env-file .env --name ua-news-bot ua-news-bot
 | Змінна              | Опис                                      | Приклад значення                        | Обов'язкове |
 |---------------------|-------------------------------------------|-----------------------------------------|-------------|
 | `BOT_TOKEN`         | Токен Telegram-бота (від BotFather)       | `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz` | Так         |
-| `CHANNEL_ID`        | ID каналу для публікації новин            | `@ua_news_channel` або `-1001234567890` | Так         |
+| `CHANNEL_ID`        | ID каналу для публікації новин            | `@novyny_ua_svit` або `-1001234567890` (рекомендовано числовий) | Так         |
 | `DATABASE_URL`      | URL бази даних (SQLite або PostgreSQL)    | `sqlite:///news.db`                     | Так         |
 | `RSS_SOURCES`       | Список RSS-каналів (через кому)           | `https://rss.nytimes.com,https://feeds.bbci.co.uk/news/rss.xml` | Так         |
 | `MORNING_DIGEST`    | Час ранкового дайджесту (UTC)             | `06:00`                                 | Ні          |
@@ -174,7 +174,7 @@ telegram-news-bot/
 
 ## Контакти
 
-- **Канал:** [UA News](https://t.me/ua_news_channel)
+- **Канал:** [UA News](https://t.me/novyny_ua_svit)
 - **Автор:** [Your Name](https://github.com/your-username)
 - **Повідомити про помилку:** [Issues](https://github.com/your-username/telegram-news-bot/issues)
 
