@@ -23,8 +23,12 @@ RSS_FEEDS = [
     {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk", "name": "Цензор.НЕТ"},
     {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk", "name": "LB.ua"},
     {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk", "name": "Європейська правда"},
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:radiosvoboda.org&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "Радіо Свобода"},
-    {"url": "https://news.google.com/rss/search?q=when:1d+site:dw.com&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "DW"},
+    # Радіо Свобода і DW переведені з Google News на ВЛАСНІ фіди (БАГ-015):
+    # через Google News модель отримувала лише заголовок — і анонс там дорівнює
+    # заголовку, і fetch_article_text не читає заглушку Google. Прямі фіди
+    # дають анонс і повний текст статті (1460–2500 символів проти 0).
+    {"url": "https://www.radiosvoboda.org/api/zrqiteuuir",        "lang": "uk", "name": "Радіо Свобода"},
+    {"url": "https://rss.dw.com/rdf/rss-ukr-all",                 "lang": "uk", "name": "DW"},
     {"url": "https://feeds.bbci.co.uk/ukrainian/rss.xml",        "lang": "uk", "name": "BBC Україна"},
     {"url": "https://news.google.com/rss?hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "Google News"},
     # --- Українські (розслідування / армія) ---
@@ -34,16 +38,18 @@ RSS_FEEDS = [
     # адреса mil.in.ua) закритий JS-перевіркою Cloudflare, включно з
     # robots.txt. Це не блокування нашого User-Agent, а заслін від будь-якого
     # клієнта без браузера, тож підбирати заголовки марно й нечесно.
-    # Законний обхід — той самий, що вже стоїть для Радіо Свободи та DW:
-    # беремо матеріали через публічний фід Google News, який має доступ до
-    # сайту легально. Джерело в пості лишається «Мілітарний» — воно
-    # підставляється з тегу <source> запису (див. fetch_news).
-    # ⚠️ Свідоме обмеження: Google News віддає лише ЗАГОЛОВОК, а тіло статті
-    # fetch_article_text усе одно не забере (той самий 403). Тому такі новини
-    # здебільшого підуть у SKIP як тизери — і це правильна поведінка, вигадувати
-    # факти з заголовка канал не буде. Реальна користь інша: заголовок
-    # доживає до merge_by_event і додає «Мілітарний» у рядок «За даними»,
-    # коли ту саму подію описало ще якесь джерело з повним текстом.
+    # Законний обхід — той самий, що лишився для Reuters і AP: беремо матеріали
+    # через публічний фід Google News, який має доступ до сайту легально.
+    # Джерело в пості лишається «Мілітарний» — воно підставляється з тегу
+    # <source> запису (див. fetch_news).
+    # ⚠️ Свідоме обмеження (БАГ-015): через Google News до моделі доходить лише
+    # ЗАГОЛОВОК — анонс там дорівнює заголовку, а тіла статті не буде подвійно
+    # (resolve_gnews_url більше не розгортає посилання, та й сам militarnyi.com
+    # віддав би 403). Тому такі новини здебільшого підуть у SKIP як тизери — і
+    # це правильна поведінка, вигадувати факти з заголовка канал не буде.
+    # Реальна користь інша: заголовок доживає до merge_by_event і додає
+    # «Мілітарний» у рядок «За даними», коли ту саму подію описало ще якесь
+    # джерело з повним текстом.
     {"url": "https://news.google.com/rss/search?q=when:1d+site:militarnyi.com&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "Мілітарний"},
     # --- Світові (загальні) ---
     {"url": "https://feeds.bbci.co.uk/news/world/rss.xml",       "lang": "en", "name": "BBC"},
@@ -51,6 +57,10 @@ RSS_FEEDS = [
     {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en", "name": "Al Jazeera"},
     {"url": "https://www.euronews.com/rss",                      "lang": "en", "name": "Euronews"},
     {"url": "http://rss.cnn.com/rss/edition_world.rss",          "lang": "en", "name": "CNN"},
+    # Reuters і AP лишаються на Google News ВИМУШЕНО (БАГ-015): власних
+    # відкритих RSS у них більше немає — перевірено 08.08, усі відомі адреси
+    # дають 404/401 або взагалі не резолвляться. Ціна відома: до моделі йде
+    # лише заголовок, тому частина їхніх новин чесно піде у SKIP.
     {"url": "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "Reuters"},
     {"url": "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "AP"},
     # --- Технології / наука ---
