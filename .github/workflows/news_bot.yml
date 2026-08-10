@@ -22,7 +22,8 @@ on:
 
 permissions:
   contents: write
-  models: read     # GitHub Models: безкоштовний виклик gpt-4.1-mini токеном workflow
+  # `models: read` прибрано (БАГ-016): GitHub Models закрито 30.07.2026,
+  # дозвіл більше нічим не керує.
 
 # Не запускати два прогони одночасно (щоб не було конфліктів git push)
 concurrency:
@@ -63,7 +64,6 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
-          GITHUB_MODELS_TOKEN: ${{ github.token }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           FEEDBACK_BOT_TOKEN: ${{ secrets.FEEDBACK_BOT_TOKEN }}

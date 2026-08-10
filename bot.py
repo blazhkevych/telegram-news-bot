@@ -162,15 +162,15 @@ LLM_PROVIDERS = [p for p in [
      "key":  os.environ.get("GROQ_API_KEY"),
      "model": "openai/gpt-oss-120b",      # 120B; llama знято 2026-06-17
      "top":  True},
-    {"name": "GitHub",
-     # GitHub Models: БЕЗКОШТОВНО через токен самого workflow (permissions:
-     # models: read у news_bot.yml) — жодних нових ключів/реєстрацій.
-     # gpt-4.1-mini — low-tier: 150 запитів/добу, 15/хв, ~8k токенів на вхід
-     # (наші промпти ≈3-5k — вміщаються). Сильніша за всі наші резерви.
-     "url":  "https://models.github.ai/inference/chat/completions",
-     "key":  os.environ.get("GITHUB_MODELS_TOKEN"),
-     "model": "openai/gpt-4.1-mini",
-     "top":  True},
+    # ⚰️ GitHub Models ВИДАЛЕНО (БАГ-016, 10.08.2026). Не «тимчасово впало» і не
+    # зміна моделі: GitHub закрив СЕРВІС цілком — 30.07.2026, після навчальних
+    # brownout-ів 16 і 23 липня. Playground, каталог, inference API і BYOK
+    # вимкнено для всіх без винятку, заміни в межах GitHub немає (офіційний
+    # шлях міграції — платний Azure AI Foundry, що суперечить умові проекту
+    # «тільки безкоштовне»). Провайдер повертав 410 на КОЖНОМУ виклику в
+    # кожному прогоні — це були чисті втрати часу й сміття в підсумку адміну.
+    # Разом з ним прибрано `permissions: models: read` і GITHUB_MODELS_TOKEN
+    # з news_bot.yml — вони більше нічим не керують.
     {"name": "Mistral",
      # La Plateforme, план Experiment: 1 МЛРД токенів/місяць безкоштовно
      # (≈30 млн/добу — найщедріший ліміт з усіх) — ідеальний робочий кінь
@@ -187,9 +187,22 @@ LLM_PROVIDERS = [p for p in [
      # deepseek-v4-flash — фронтир-клас, швидка, без «міркувань» (вкладається
      # в timeout=30с; v4-pro якісніша, але повільна). Активується сам, щойно
      # власник додасть секрет NVIDIA_API_KEY (реєстрація email, без картки).
+     #
+     # ⚠️ Ім'я моделі з суфіксом дати — НЕ описка (БАГ-016). Голий
+     # `deepseek-ai/deepseek-v4-flash` помер 07.08.2026 о 09:00 UTC і віддавав
+     # 410 «has reached its end of life» на кожному виклику. Тут, на відміну
+     # від GitHub Models, помер саме ВЕРСІЙНИЙ ярлик, а не провайдер: NVIDIA
+     # жива, у каталозі 101 модель, і спадкоємець лежить поруч під датованим
+     # ім'ям. Перевірено на публічному GET /v1/models: `-0731` у списку є,
+     # голого імені немає.
+     # НАСТУПНИЙ РАЗ ШУКАТИ ТАК САМО — каталог відкритий без ключа:
+     #   curl -s https://integrate.api.nvidia.com/v1/models
+     # ⏭ Якщо якість цієї моделі просяде (на форумах NVIDIA скаржаться саме на
+     # 0731), у тому ж каталозі лежить `openai/gpt-oss-120b` — рівно та модель,
+     # що стоїть у нас першою через Groq, але тут без добового ліміту.
      "url":  "https://integrate.api.nvidia.com/v1/chat/completions",
      "key":  os.environ.get("NVIDIA_API_KEY"),
-     "model": "deepseek-ai/deepseek-v4-flash"},
+     "model": "deepseek-ai/deepseek-v4-flash-0731"},
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
