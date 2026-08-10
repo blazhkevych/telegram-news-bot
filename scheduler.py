@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import subprocess
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pytz
 
 # «Живий режим»: воркфлоу запускається часто (кожні ~15 хв), тож:
@@ -47,7 +47,54 @@ def run(script, extra_env=None):
     return subprocess.run(["python", script], env=env).returncode == 0
 
 
+# ─── Сторож графіка ───────────────────────────────────────────────────────
+# За добу 09–10.08 канал зробив 123 прогони: 96 із них — workflow_dispatch від
+# ЗОВНІШНЬОГО пінгера (EXTERNAL_TRIGGER.md) і лише 27 — власний cron GitHub,
+# який б'є врозбіг (09:22, 10:04, 10:51…). Тобто рівний графік «кожні 15 хв»
+# тримає один зовнішній сервіс, і його зупинка не має ЖОДНОГО сигналу: канал
+# просто почне виходити раз на годину, а виглядатиме це як «мало новин».
+# Ловимо це так: щоразу пишемо час прогону, і якщо від попереднього минуло
+# більше MAX_GAP_MIN — шлемо адміну рядок. Прогони GitHub-cron (~1 на годину)
+# лишаються навіть при мертвому пінгері, тож саме вони й піднімуть тривогу.
+MAX_GAP_MIN = 40   # 15 хв графіка × 2 + запас на чергу concurrency
+
+
+def watch_schedule():
+    conn = _conn()
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+    row  = conn.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
+    conn.execute("INSERT OR REPLACE INTO meta VALUES ('last_run', ?)",
+                 (now.isoformat(),))
+    conn.commit()
+    conn.close()
+    if not row:
+        return                                   # перший прогін — нема з чим порівнювати
+    try:
+        prev = datetime.fromisoformat(row[0])
+    except ValueError:
+        return
+    gap = (now - prev).total_seconds() / 60
+    if gap <= MAX_GAP_MIN:
+        return
+    print(f"⚠️ Розрив у графіку: {gap:.0f} хв (норма ≤ {MAX_GAP_MIN})")
+    token, chat = os.environ.get("FEEDBACK_BOT_TOKEN"), os.environ.get("ADMIN_CHAT_ID")
+    if not (token and chat):
+        return
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat,
+                  "text": f"⚠️ Прогонів не було {gap:.0f} хв "
+                          f"(попередній {prev.strftime('%d.%m %H:%M')}, норма ≤ {MAX_GAP_MIN}). "
+                          f"Найімовірніша причина — зупинився зовнішній тригер."},
+            timeout=10)
+    except Exception as e:
+        print(f"⚠️ Не вдалося попередити про розрив: {e}")
+
+
 print(f"🕐 Київський час: {now.strftime('%H:%M')} ({now.strftime('%Z')})")
+watch_schedule()
 
 # 1) Новини — щоразу
 print("📰 Збір новин...")

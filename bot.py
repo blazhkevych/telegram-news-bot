@@ -65,11 +65,17 @@ RSS_FEEDS = [
     {"url": "https://news.google.com/rss/search?q=when:1d+site:reuters.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "Reuters"},
     {"url": "https://news.google.com/rss/search?q=when:1d+site:apnews.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "AP"},
     # --- Технології / наука ---
-    {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk", "name": "DOU"},
-    {"url": "https://techcrunch.com/feed/",                      "lang": "en", "name": "TechCrunch"},
-    {"url": "https://www.theverge.com/rss/index.xml",            "lang": "en", "name": "The Verge"},
-    {"url": "https://feeds.arstechnica.com/arstechnica/index",   "lang": "en", "name": "Ars Technica"},
-    {"url": "https://www.sciencedaily.com/rss/all.xml",          "lang": "en", "name": "ScienceDaily"},
+    # topic="tech" — НЕ косметика, а окремий кошик у fetch_news (issue #7).
+    # Без нього ці фіди програють війні у власній мовній групі й не доходять
+    # до курації взагалі: за добу 09–10.08 вони дали 7 постів із 352 (2%),
+    # причому The Guardian, CNN, Ars Technica, ScienceDaily і DOU не дали
+    # ЖОДНОГО, хоч feed_check показав їх живими. Опис каналу обіцяє
+    # «технології, наука» — обіцянку тримає саме цей тег.
+    {"url": "https://dou.ua/lenta/feed/",                        "lang": "uk", "name": "DOU",          "topic": "tech"},
+    {"url": "https://techcrunch.com/feed/",                      "lang": "en", "name": "TechCrunch",   "topic": "tech"},
+    {"url": "https://www.theverge.com/rss/index.xml",            "lang": "en", "name": "The Verge",    "topic": "tech"},
+    {"url": "https://feeds.arstechnica.com/arstechnica/index",   "lang": "en", "name": "Ars Technica", "topic": "tech"},
+    {"url": "https://www.sciencedaily.com/rss/all.xml",          "lang": "en", "name": "ScienceDaily", "topic": "tech"},
 ]
 
 SPAM_KEYWORDS = [
@@ -102,7 +108,26 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID        = os.environ["TELEGRAM_CHANNEL_ID"]
 GROQ_API_KEY      = os.environ["GROQ_API_KEY"]
 DB_PATH           = "published.db"
-MAX_POSTS_PER_RUN = 3   # «живий режим»: запуск часто, кілька постів за раз
+# Скільки постів максимум за один прогін. 3 → 2 (10.08, після добового зрізу).
+# ПРИЧИНА, замірена, а не відчута: за добу 09–10.08 канал видав 352 пости —
+# один кожні 4 хвилини — і 88% прогонів упирались саме в цю константу. Тобто
+# обсяг задавала НЕ наявність новин, а число тут. Прочитали ці 352 пости
+# ~2 людини, і за 6 діб (≈2000 постів) канал не набрав жодного підписника —
+# отже обсяг не працює ні на кого, і платити за нього більше нічим.
+#
+# ЩО ЦЕ ДАЄ, крім меншого спаму: відбір відсортовано за ПІДТВЕРДЖЕНІСТЮ
+# (source_count — скільки різних видань написали про подію). Коли з тих самих
+# ~12 кандидатів у канал виходить 2, а не 3, зрізається саме «хвіст» —
+# одноджерельні новини. Значок «✅ Підтверджено N джерелами» був у 6% постів;
+# це той важіль, який має його підняти. Заодно вдвічі менше викликів LLM на
+# прогін — тобто менший ризик 429 і запас квоти під якісніший відбір.
+#
+# ЯК ВІДКОТИТИ: поставити 3. Нічого іншого міняти не треба — max_pick у
+# curate_with_ai рахується від цього числа (MAX_POSTS_PER_RUN * 2), і резерв
+# «модель-письменник ще може відхилити частину» лишається дворазовим.
+# Невідібрані кандидати не потрапляють у skipped, тож наступний прогін бачить
+# їх знову; застою це не робить — сортування третім ключем бере свіжіше.
+MAX_POSTS_PER_RUN = 2
 
 # ── Самодіагностика: підсумок запуску адміну в Telegram ────
 FEEDBACK_TOKEN = os.environ.get("FEEDBACK_BOT_TOKEN")
@@ -819,6 +844,11 @@ def fetch_news(conn):
                     "url":       url,
                     "source":    source,
                     "lang":      feed_cfg["lang"],
+                    # Рубрика фіду ("tech" або None) — по ній fetch_news тримає
+                    # окремий кошик для техно/науки. dict(it) у merge_by_event і
+                    # merge_group копіює ключ разом з рештою, тож тег переживає
+                    # злиття подій.
+                    "topic":     feed_cfg.get("topic"),
                     "image_url": extract_image(entry),
                     # Час публікації — третій ключ сортування: за рівної
                     # підтвердженості вище має бути свіжіше, бо канал обіцяє
@@ -845,11 +875,20 @@ def fetch_news(conn):
     # українське/воєнне слово) виштовхував англомовні джерела — BBC, Guardian,
     # Reuters, AP — за межі топ-12, і курація їх узагалі не бачила: канал виходив
     # лише з українських джерел, хоч і обіцяє «новини України ТА СВІТУ».
-    ua = [x for x in items if x.get("lang") == "uk"]
-    en = [x for x in items if x.get("lang") == "en"]
-    picked = ua[:9] + en[:3]
+    # Третій кошик — техно/наука (issue #7). Мовного резерву їм НЕ вистачало:
+    # DOU сидів в українському кошику проти півсотні воєнних новин, а
+    # TechCrunch/Verge/Ars/ScienceDaily ділили en[:3] з Reuters/AP/BBC про
+    # війну — і за добу 09–10.08 програли всі три слоти (2% каналу, п'ять
+    # фідів з нулем постів). Резерв дає їм місце в кандидатах; чи вийде новина
+    # в канал, і далі вирішує курація — це не квота на публікацію.
+    # Ціна резерву — по одному слоту з кожного кошика (9→8 і 3→2). Світові
+    # новини цим не ламаються: у них 11% каналу проти 2% у техно/науки.
+    ua   = [x for x in items if x.get("lang") == "uk" and x.get("topic") != "tech"]
+    en   = [x for x in items if x.get("lang") == "en" and x.get("topic") != "tech"]
+    tech = [x for x in items if x.get("topic") == "tech"]
+    picked = ua[:8] + en[:2] + tech[:2]
     if len(picked) < 12:                       # чогось бракує — добираємо рештою
-        rest = [x for x in ua[9:] + en[3:] if x not in picked]
+        rest = [x for x in ua[8:] + en[2:] + tech[2:] if x not in picked]
         picked += rest[:12 - len(picked)]
     return picked
 
