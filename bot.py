@@ -39,6 +39,16 @@ RSS_FEEDS = [
     {"url": "https://censor.net/ua/includes/news_uk.xml",        "lang": "uk", "name": "Цензор.НЕТ"},
     {"url": "https://lb.ua/rss/ukr/news.xml",                    "lang": "uk", "name": "LB.ua"},
     {"url": "https://www.eurointegration.com.ua/rss/",           "lang": "uk", "name": "Європейська правда"},
+    # Додано 17.08.2026 (усі перевірені живими того ж дня — див. запис нижче).
+    # Економічна правда закриває реальну дірку: канал регулярно постить курси
+    # валют і економіку переказом УНІАН, тобто попит є, а профільного джерела
+    # не було.
+    {"url": "https://www.epravda.com.ua/rss/",                   "lang": "uk", "name": "Економічна правда"},
+    {"url": "https://ua.interfax.com.ua/news/last.rss",          "lang": "uk", "name": "Інтерфакс-Україна"},
+    # ZN.ua — лише через Google News: власний https://zn.ua/rss віддає 0 записів.
+    # Ціна та сама, що в Reuters/AP/CNN (БАГ-015): до моделі доходить лише
+    # заголовок, тому частина новин чесно піде в SKIP.
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:zn.ua&hl=uk&gl=UA&ceid=UA:uk", "lang": "uk", "name": "ZN.ua"},
     # Радіо Свобода і DW переведені з Google News на ВЛАСНІ фіди (БАГ-015):
     # через Google News модель отримувала лише заголовок — і анонс там дорівнює
     # заголовку, і fetch_article_text не читає заглушку Google. Прямі фіди
@@ -72,6 +82,16 @@ RSS_FEEDS = [
     {"url": "https://www.theguardian.com/world/rss",             "lang": "en", "name": "The Guardian"},
     {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en", "name": "Al Jazeera"},
     {"url": "https://www.euronews.com/rss",                      "lang": "en", "name": "Euronews"},
+    # Додано 17.08.2026. Kyiv Independent був згаданий у README як джерело
+    # каналу, але в коді його не було ЖОДНОГО разу. Власний фід
+    # (kyivindependent.com/feed/ і /rss/) віддає 0 записів — тільки Google News.
+    # lang="en" — він пише англійською, тож потрапляє в англійський кошик; там
+    # він має перевагу за ukraine_score і, найімовірніше, витіснятиме частину
+    # суто світових новин. Це свідомо: канал український.
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:kyivindependent.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "Kyiv Independent"},
+    {"url": "https://www.politico.eu/feed/",                     "lang": "en", "name": "Politico Europe"},
+    {"url": "https://www.france24.com/en/rss",                   "lang": "en", "name": "France24"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "lang": "en", "name": "NYT World"},
     # CNN — той самий вимушений обхід, що й Reuters/AP нижче (БАГ-015), але
     # причина ІНША і небезпечніша. Старий rss.cnn.com не помер: він віддає
     # HTTP 200 і 29 записів, тому feed_check рахував його живим. Просто всі
@@ -377,14 +397,37 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
         for model in models_of(p):
             if model in _DEAD_MODELS:
                 continue      # у цьому прогоні вже впевнились, що її нема
+            body = {"model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens, "temperature": temperature}
+            # Прикручуємо «міркування» до мінімуму там, де це підтримано.
+            #
+            # НАВІЩО: gpt-oss — reasoning-модель, і за замовчуванням
+            # (reasoning_effort="medium") вона витрачає частину max_tokens на
+            # внутрішні міркування. Замір 17.08: приблизно у 2 прогонах з 5
+            # Cerebras віддавав finish_reason="length" — відповідь обірвано,
+            # бо на сам пост токенів не лишилось. Запобіжник це ловив і віддавав
+            # наступному провайдеру, тобто ~20% перших спроб пропадало марно.
+            # Нам міркування тут не потрібні: завдання — переписати готову
+            # новину в пост, а не розв'язати задачу.
+            #
+            # ЧОМУ "low", А НЕ "none": обидва наші провайдери (Cerebras і Groq)
+            # приймають лише low/medium/high і відповідають 400 на "none" —
+            # повністю вимкнути міркування в gpt-oss через API не можна
+            # (перевірено в документації обох 17.08.2026). "low" — це підлога.
+            #
+            # ЧОМУ ПЕРЕВІРКА ПО ІМЕНІ МОДЕЛІ, А НЕ ПО ПРОВАЙДЕРУ: у Cerebras
+            # поруч із gpt-oss-120b стоїть запасна gemma-4-31b, яка цього
+            # параметра не знає — на неї він поїхав би зайвим полем і міг би
+            # завалити запасний шлях саме тоді, коли він потрібен.
+            if "gpt-oss" in model:
+                body["reasoning_effort"] = "low"
             try:
                 r = requests.post(
                     p["url"],
                     headers={"Authorization": f"Bearer {p['key']}",
                              "Content-Type": "application/json"},
-                    json={"model": model,
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": max_tokens, "temperature": temperature},
+                    json=body,
                     timeout=LLM_TIMEOUT,
                 )
                 if r.status_code == 429:
