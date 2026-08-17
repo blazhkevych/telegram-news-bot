@@ -73,6 +73,19 @@ def catalog(p):
         return None
 
 
+def in_catalog(model, ids):
+    """Чи є модель у каталозі — з поправкою на префікси провайдерів.
+
+    Точне порівняння давало ХИБНУ тривогу: Google віддає імена як
+    `models/gemini-3.5-flash`, тож усі три моделі Gemini у першому ж звіті
+    (17.08) отримали «немає в каталозі», хоча реальний виклик до двох із них
+    повертав 200. Хибний сигнал у щоденному звіті гірший за відсутній: його
+    швидко вчаться ігнорувати — разом зі справжніми.
+    """
+    return any(i == model or i.endswith("/" + model) or model.endswith("/" + i)
+               for i in ids)
+
+
 def probe(p, model):
     """Реальний виклик КОНКРЕТНОЇ моделі. Повертає (значок, пояснення)."""
     try:
@@ -112,7 +125,7 @@ def main():
             mark, why = probe(p, model)
             # Про каталог згадуємо, лише коли він СУПЕРЕЧИТЬ конфігу: «моделі
             # немає у списку» — сигнал. «Є» або «не спитали» — шум.
-            note = "  ⚠️ немає в каталозі" if (cat is not None and model not in cat) else ""
+            note = "  ⚠️ немає в каталозі" if (cat is not None and not in_catalog(model, cat)) else ""
             role = "основна" if i == 0 else f"запасна {i}"
             lines.append(f"{mark} {p['name']} / {model} ({role}): {why}{note}")
             if mark in ("✅", "🟡"):
