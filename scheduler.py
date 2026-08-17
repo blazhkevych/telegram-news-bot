@@ -112,6 +112,16 @@ if hour >= 6 and not done_today("feed_check"):
     if run("feed_check.py"):
         mark_today("feed_check")
 
+# 2c) Перевірка LLM-провайдерів — раз на добу (від 6:00).
+# Той самий принцип, що й feed_check, але для другої половини конвеєра: RSS
+# дає новини, LLM їх пише, і мовчазно вмирати вміють обидва. Двічі це вже
+# коштувало тижнів марних викликів (GitHub Models 410, Mistral 402) — обидва
+# рази діагноз поставила людина, яка читала логи. Див. llm_check.py.
+if hour >= 6 and not done_today("llm_check"):
+    print("🤖 Перевірка LLM-провайдерів...")
+    if run("llm_check.py"):
+        mark_today("llm_check")
+
 # 3) Ранковий дайджест — раз на добу, перший запуск від 6:00
 if 6 <= hour < 21 and not done_today("morning"):
     print("🌅 Ранковий дайджест...")

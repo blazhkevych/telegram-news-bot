@@ -57,7 +57,16 @@ RSS_FEEDS = [
     {"url": "https://www.theguardian.com/world/rss",             "lang": "en", "name": "The Guardian"},
     {"url": "https://www.aljazeera.com/xml/rss/all.xml",         "lang": "en", "name": "Al Jazeera"},
     {"url": "https://www.euronews.com/rss",                      "lang": "en", "name": "Euronews"},
-    {"url": "http://rss.cnn.com/rss/edition_world.rss",          "lang": "en", "name": "CNN"},
+    # CNN — той самий вимушений обхід, що й Reuters/AP нижче (БАГ-015), але
+    # причина ІНША і небезпечніша. Старий rss.cnn.com не помер: він віддає
+    # HTTP 200 і 29 записів, тому feed_check рахував його живим. Просто всі
+    # записи ЗАМОРОЖЕНІ на 14.04.2023 — фід не оновлювався 1064 доби.
+    # Наслідок: за 7 діб CNN дав у канал РІВНО НУЛЬ постів, і жодна перевірка
+    # про це не сказала (аудит 17.08.2026). Перевірено того ж дня: edition.cnn.com
+    # (куди веде 302 з www) віддає 0 записів, cnn_world.rss і edition.rss —
+    # та сама заморозка 2023 року. Google News site:cnn.com віддає 100 свіжих.
+    # Ціна відома й та сама, що в Reuters/AP: до моделі доходить лише заголовок.
+    {"url": "https://news.google.com/rss/search?q=when:1d+site:cnn.com&hl=en-US&gl=US&ceid=US:en", "lang": "en", "name": "CNN"},
     # Reuters і AP лишаються на Google News ВИМУШЕНО (БАГ-015): власних
     # відкритих RSS у них більше немає — перевірено 08.08, усі відомі адреси
     # дають 404/401 або взагалі не резолвляться. Ціна відома: до моделі йде
@@ -150,17 +159,47 @@ def notify_admin(text):
 # Пробуємо по черзі: якщо один уперся в ліміт/помилку — бере наступний.
 # Провайдер без ключа в оточенні автоматично пропускається.
 LLM_PROVIDERS = [p for p in [
-    # Порядок = ЯКІСТЬ (найсильніша модель перша) — це прямо б'є в БАГ-006
-    # (галюцинації/вигадана стать: сильніша модель менше «додумує»).
-    # Ланцюг самобалансується: хто в 429 — того пропускаємо. Підсумок адміну
-    # (STATS) показує реальний баланс «Groq×N, GitHub×M…».
-    # "top": True — модель сильна, але з малим добовим лімітом: save_strong
-    # (добивочні пости) відсуває такі в кінець черги, щоб квота діставалась
-    # курації та найважливішому посту прогону.
+    # ПОРЯДОК ПЕРЕБУДОВАНО 17.08.2026 за підсумками ревізії ланцюга.
+    #
+    # Було: «порядок = якість», найсильніша модель перша (Groq gpt-oss-120b).
+    # Передумова — що квоти сильної моделі вистачить на добу — виявилась хибною.
+    # Замір за 16–17.08: канал робить ~680 викликів LLM на добу (3,7 на пост:
+    # курація + семантичний дедуп + переписування), а безкоштовний ліміт Groq
+    # на цю модель — 200 тис. токенів/добу, тобто ~100–150 викликів. Квота
+    # вигоряла за першу годину, і 23 години з 24 канал писав РЕЗЕРВ: у вибірці
+    # з 15 прогонів Groq дав 3,4% успішних викликів, NVIDIA — 63%, Cerebras — 32%.
+    # Тобто механіка save_strong берегла квоту, якої фізично не існує.
+    #
+    # Стало: перший — той, у кого НЕМАЄ добового ліміту обсягу. Ключове відкриття
+    # ревізії: `gpt-oss-120b` — та сама модель, що стояла першою через Groq —
+    # лежить і в каталозі NVIDIA, і в Cloudflare. Тобто якість більше не
+    # конфліктує з квотою: три ноги дають ОДНУ модель, і «економити сильну»
+    # більше не треба. save_strong і "top" лишаються — тепер вони справді про
+    # дефіцитну квоту Groq, а не про якість.
+    {"name": "NVIDIA",
+     # build.nvidia.com (NIM): ліміт лише 40 запитів/хв, БЕЗ обмеження обсягу —
+     # єдиний у ланцюгу, хто витримує наш добовий потік цілком. Плата за це —
+     # надійність: потужність спільна для всіх безкоштовних акаунтів, звідси
+     # 529 Overloaded і таймаути (~1,9 відмови на прогін). Саме тому
+     # LLM_TIMEOUT знижено до 12 с: дешевий failover тут важливіший за терпіння.
+     "url":  "https://integrate.api.nvidia.com/v1/chat/completions",
+     "key":  os.environ.get("NVIDIA_API_KEY"),
+     # Перша — та сама модель, що в Groq і Cloudflare (перевірено у відкритому
+     # каталозі 17.08.2026: curl -s https://integrate.api.nvidia.com/v1/models).
+     # Далі — deepseek, який тут стояв раніше, і nemotron як третій рубіж.
+     "models": ["openai/gpt-oss-120b",
+                "deepseek-ai/deepseek-v4-flash-0731",
+                "nvidia/nemotron-3-super-120b-a12b"]},
     {"name": "Groq",
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
-     "model": "openai/gpt-oss-120b",      # 120B; llama знято 2026-06-17
+     # "top": квота мала (200 тис. токенів/добу ≈ 100–150 викликів), тому
+     # save_strong відсуває Groq у кінець для «добивочних» викликів. Модель та
+     # сама, що в NVIDIA/Cloudflare, тож втрати якості від цього немає — це
+     # чисто розподіл дефіциту.
+     "models": ["openai/gpt-oss-120b",    # llama знято 2026-06-17
+                "llama-3.3-70b-versatile",
+                "openai/gpt-oss-20b"],
      "top":  True},
     # ⚰️ GitHub Models ВИДАЛЕНО (БАГ-016, 10.08.2026). Не «тимчасово впало» і не
     # зміна моделі: GitHub закрив СЕРВІС цілком — 30.07.2026, після навчальних
@@ -171,48 +210,113 @@ LLM_PROVIDERS = [p for p in [
     # кожному прогоні — це були чисті втрати часу й сміття в підсумку адміну.
     # Разом з ним прибрано `permissions: models: read` і GITHUB_MODELS_TOKEN
     # з news_bot.yml — вони більше нічим не керують.
-    {"name": "Mistral",
-     # La Plateforme, план Experiment: 1 МЛРД токенів/місяць безкоштовно
-     # (≈30 млн/добу — найщедріший ліміт з усіх) — ідеальний робочий кінь
-     # замість gemma. Активується сам, щойно власник додасть секрет
-     # MISTRAL_API_KEY (реєстрація безкоштовна, без картки; на free-плані
-     # треба погодити opt-in на навчання — для публічних новин прийнятно).
-     "url":  "https://api.mistral.ai/v1/chat/completions",
-     "key":  os.environ.get("MISTRAL_API_KEY"),
-     "model": "mistral-large-latest"},
-    {"name": "NVIDIA",
-     # build.nvidia.com (NIM): БЕЗЛІМІТ за обсягом на безкоштовному тарифі
-     # (кредитні ліміти прибрано 2026), обмеження лише 40 запитів/хв — нам
-     # достатньо (≈7 послідовних викликів на прогін). Каталог 118 моделей.
-     # deepseek-v4-flash — фронтир-клас, швидка, без «міркувань» (вкладається
-     # в timeout=30с; v4-pro якісніша, але повільна). Активується сам, щойно
-     # власник додасть секрет NVIDIA_API_KEY (реєстрація email, без картки).
-     #
-     # ⚠️ Ім'я моделі з суфіксом дати — НЕ описка (БАГ-016). Голий
-     # `deepseek-ai/deepseek-v4-flash` помер 07.08.2026 о 09:00 UTC і віддавав
-     # 410 «has reached its end of life» на кожному виклику. Тут, на відміну
-     # від GitHub Models, помер саме ВЕРСІЙНИЙ ярлик, а не провайдер: NVIDIA
-     # жива, у каталозі 101 модель, і спадкоємець лежить поруч під датованим
-     # ім'ям. Перевірено на публічному GET /v1/models: `-0731` у списку є,
-     # голого імені немає.
-     # НАСТУПНИЙ РАЗ ШУКАТИ ТАК САМО — каталог відкритий без ключа:
-     #   curl -s https://integrate.api.nvidia.com/v1/models
-     # ⏭ Якщо якість цієї моделі просяде (на форумах NVIDIA скаржаться саме на
-     # 0731), у тому ж каталозі лежить `openai/gpt-oss-120b` — рівно та модель,
-     # що стоїть у нас першою через Groq, але тут без добового ліміту.
-     "url":  "https://integrate.api.nvidia.com/v1/chat/completions",
-     "key":  os.environ.get("NVIDIA_API_KEY"),
-     "model": "deepseek-ai/deepseek-v4-flash-0731"},
+    # ⚰️ Mistral ВИДАЛЕНО (ревізія 17.08.2026) — другий випадок того ж класу,
+    # що й GitHub Models вище, і виявлений тим самим способом: провайдер віддавав
+    # 402 «Check your subscription» на КОЖНОМУ виклику. Замір: ~5,6 мертвих
+    # запитів на прогін ≈ 660 на добу, і в логах це виглядало звичайним шумом.
+    # Безкоштовний план Experiment, заради якого його заводили, більше не
+    # покриває цю модель — потрібна платна підписка, а це суперечить умові
+    # проекту «тільки безкоштовне» (рішення власника 17.08: грошей немає).
+    # Секрет MISTRAL_API_KEY у news_bot.yml прибрано — він більше нічим не керує.
+    # ⏭ ЯК ПОВЕРНУТИ: якщо Mistral колись відновить безкоштовний доступ —
+    # додати запис назад; llm_check.py покаже це першим же 200 замість 402.
+    #
+    # ЩОБ ЦЕ БІЛЬШЕ НЕ ЖИЛО ТИЖНЯМИ: обидва рази діагноз поставила людина, яка
+    # читала логи. Тепер це робить llm_check.py щодоби (див. scheduler.py) —
+    # він відрізняє «квота вичерпана сьогодні» (429) від «мертвий назавжди»
+    # (401/402/403/404/410) і пише адміну рядок «ПРИБРАТИ З ЛАНЦЮГА».
+    # Cloudflare Workers AI — доданий 17.08.2026 за підсумками ревізії ланцюга.
+    # Навіщо ще один: 10 тис. «нейронів»/добу ≈ 1 300 відповідей — це БІЛЬШЕ за
+    # весь наш добовий обсяг (~680 викликів), тобто одна ця нога здатна тримати
+    # канал самотужки. Без картки, ліміт добовий (не місячний), ендпоінт
+    # OpenAI-сумісний — рівно та властивість, на якій тримається весь ланцюг.
+    # І головне: у каталозі є ТОЙ САМИЙ gpt-oss-120b, що стоїть першим у Groq.
+    #
+    # URL залежить від акаунта, тому збирається з CF_ACCOUNT_ID. Провайдер
+    # активується сам, щойно з'являться ОБИДВА секрети (без account_id URL
+    # безглуздий, тому key нижче навмисно None, якщо бракує хоч одного).
+    {"name": "Cloudflare",
+     "url":  "https://api.cloudflare.com/client/v4/accounts/"
+             f"{os.environ.get('CF_ACCOUNT_ID', '')}/ai/v1/chat/completions",
+     "key":  (os.environ.get("CF_API_TOKEN")
+              if os.environ.get("CF_ACCOUNT_ID") else None),
+     "models": ["@cf/openai/gpt-oss-120b",
+                "@cf/meta/llama-4-scout-17b-16e-instruct",
+                "@cf/meta/llama-3.3-70b-instruct-fp8-fast"]},
     {"name": "Cerebras",
      "url":  "https://api.cerebras.ai/v1/chat/completions",
      "key":  os.environ.get("CEREBRAS_API_KEY"),
-     "model": "gemma-4-31b"},             # 31B, швидкий резерв: 1 млн токенів/добу
+     # Швидкий резерв: 1 млн токенів/добу. Запасні назви — не косметика:
+     # безкоштовний каталог Cerebras скорочувався без попередження, а gemma
+     # тут була ЄДИНОЮ назвою (див. models_of). Порядок = від сильнішого.
+     "models": ["gpt-oss-120b", "gemma-4-31b", "llama-3.3-70b"]},
     {"name": "Gemini",
      "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
      "key":  os.environ.get("GEMINI_API_KEY"),
-     "model": "gemini-3.5-flash"},        # останній резерв; gemini-2.5-flash Google закрив
-     # для нових користувачів (404 «no longer available»); 3.5-flash — актуальна GA. БАГ-008.
+     # Останній резерв. gemini-2.5-flash Google закрив для нових користувачів
+     # (404 «no longer available»), 3.5-flash — актуальна GA (БАГ-008). Саме
+     # цей провайдер уже раз помер через назву, тому запасні тут обов'язкові;
+     # `gemini-flash-latest` — псевдонім, який Google рухає сам.
+     "models": ["gemini-3.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]},
 ] if p["key"]]
+
+# Скільки чекати на відповідь провайдера. Було 30 с — і це виявилось дорого:
+# аудит 17.08.2026 намірив ~1,3 таймаути NVIDIA на прогін, тобто ~40 с чистого
+# простою на прогін ≈ 80 хвилин на добу. NVIDIA на безкоштовному тарифі ділить
+# потужність між усіма охочими, тож «повільно» тут означає не «зараз відповість»,
+# а «сьогодні перевантажена» — і чекати на неї немає сенсу, коли поруч у черзі
+# стоїть той самий gpt-oss-120b у Groq і Cloudflare. Дешевий failover цінніший
+# за терпіння: 12 с вистачає здоровому провайдеру з запасом.
+LLM_TIMEOUT = 12
+
+# Моделі, які в ЦЬОМУ прогоні вже відповіли «мене більше немає» (404/410).
+# Живе лише в пам'яті процесу і навмисно не зберігається: провайдери іноді
+# віддають 404 помилково, а перезапуск раз на 15 хв дає безкоштовну повторну
+# перевірку. Сенс — не повторювати мертвий виклик 5-6 разів за один прогін.
+_DEAD_MODELS = set()
+
+
+def models_of(p):
+    """Моделі провайдера за пріоритетом: перша — бажана, решта — запасні.
+
+    НАВІЩО СПИСОК, А НЕ РЯДОК. Одна захардкоджена назва — це відкладена
+    зупинка, і проект уже двічі на це наступив (обидва рази БАГ-016):
+    NVIDIA `deepseek-v4-flash` помер 07.08.2026 о 09:00 UTC і віддавав 410
+    «has reached its end of life» на КОЖНОМУ виклику, а Gemini `2.5-flash`
+    Google закрив для нових користувачів. Провайдер при цьому лишався живим —
+    падала саме назва. Каталоги ж волатильні: у Cerebras список моделей, за
+    свідченнями користувачів, скорочувався без попередження.
+
+    Зі списком така смерть перестає бути аварією: call_llm ловить 404/410,
+    запам'ятовує назву в _DEAD_MODELS і бере наступну — канал не помічає.
+    Запис у STATS усе одно піде адміну, тобто мовчазною підміна не буде.
+
+    Сумісність: якщо у провайдера заданий одиничний "model" — працює як раніше.
+    """
+    return p.get("models") or [p["model"]]
+
+
+def is_model_gone(r):
+    """Чи означає відповідь «цієї моделі більше немає» (на відміну від «зайнята»).
+
+    Розрізнення принципове: 429/5xx — привід зачекати або піти до іншого
+    провайдера, 404/410 — привід НАЗАВЖДИ змінити назву моделі. Плутанина між
+    ними коштувала проекту 11 діб марних викликів до GitHub Models.
+
+    Частина провайдерів віддає це не статусом, а текстом у 400 — тому й
+    перевірка тіла. Слова взяті з реальних відповідей: NVIDIA писала
+    «has reached its end of life», OpenAI-сумісні — «model not found»,
+    «decommissioned».
+    """
+    if r.status_code in (404, 410):
+        return True
+    if r.status_code != 400:
+        return False
+    body = (r.text or "").lower()
+    return any(s in body for s in ("model not found", "does not exist",
+                                   "end of life", "decommission",
+                                   "no longer available", "unknown model"))
+
 
 def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
     """Пробує провайдерів по черзі. Повертає текст, 'RATE_LIMIT' (усі в ліміті)
@@ -232,49 +336,65 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
                      + [p for p in LLM_PROVIDERS if p.get("top")])
     all_rate_limited = True
     for p in providers:
-        try:
-            r = requests.post(
-                p["url"],
-                headers={"Authorization": f"Bearer {p['key']}",
-                         "Content-Type": "application/json"},
-                json={"model": p["model"],
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": max_tokens, "temperature": temperature},
-                timeout=30,
-            )
-            if r.status_code == 429:
-                print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
-                STATS["err"][p["name"]] = "ліміт (429)"
-                continue
-            if r.status_code >= 400:
-                # raise_for_status показує лише статус+URL (URL ще й обрізається
-                # логом до 70 симв. → «...generativelanguage.google»). Тіло
-                # відповіді містить справжню причину (модель/ключ/API вимкнено).
+        for model in models_of(p):
+            if model in _DEAD_MODELS:
+                continue      # у цьому прогоні вже впевнились, що її нема
+            try:
+                r = requests.post(
+                    p["url"],
+                    headers={"Authorization": f"Bearer {p['key']}",
+                             "Content-Type": "application/json"},
+                    json={"model": model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": max_tokens, "temperature": temperature},
+                    timeout=LLM_TIMEOUT,
+                )
+                if r.status_code == 429:
+                    print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
+                    STATS["err"][p["name"]] = "ліміт (429)"
+                    break     # ліміт у провайдера, а не в моделі — решта його
+                              # моделей уперлася б у ту саму квоту
+                if is_model_gone(r):
+                    # Модель зникла — але ПРОВАЙДЕР живий. Єдиний випадок, коли
+                    # має сенс лишитись тут і взяти запасну назву (див.
+                    # _DEAD_MODELS). Решта 4xx — проблема ключа/доступу, там
+                    # запасна модель не допоможе.
+                    all_rate_limited = False
+                    _DEAD_MODELS.add(model)
+                    nxt = [m for m in models_of(p) if m not in _DEAD_MODELS]
+                    print(f"⚰️ {p['name']}: модель {model} закрито ({r.status_code}) — "
+                          + (f"перемикаюсь на {nxt[0]}" if nxt else "запасних немає"))
+                    STATS["err"][p["name"]] = f"модель {model} закрито ({r.status_code})"
+                    continue
+                if r.status_code >= 400:
+                    # raise_for_status показує лише статус+URL (URL ще й обрізається
+                    # логом до 70 симв. → «...generativelanguage.google»). Тіло
+                    # відповіді містить справжню причину (модель/ключ/API вимкнено).
+                    all_rate_limited = False
+                    reason = " ".join((r.text or "").split())
+                    print(f"❌ {p['name']}: {r.status_code} — {reason[:300]}")
+                    STATS["err"][p["name"]] = f"{r.status_code}: {reason[:120]}"
+                    break
                 all_rate_limited = False
-                reason = " ".join((r.text or "").split())
-                print(f"❌ {p['name']}: {r.status_code} — {reason[:300]}")
-                STATS["err"][p["name"]] = f"{r.status_code}: {reason[:120]}"
-                continue
-            all_rate_limited = False
-            choice  = r.json()["choices"][0]
-            content = (choice.get("message", {}).get("content") or "").strip()
-            # finish_reason="length" = відповідь ОБІРВАНО на ліміті токенів.
-            # Так у канал потрапляли пости на півслові («...дворічну підтрим»):
-            # reasoning-моделі (gpt-oss-120b) палять max_tokens на «міркування»,
-            # і на сам текст їх не лишається. Обірване НЕ публікуємо — краще
-            # віддати наступному провайдеру (Cerebras — без «міркувань»).
-            if choice.get("finish_reason") == "length":
-                print(f"⚠️ {p['name']}: відповідь обірвано на ліміті токенів — наступний провайдер.")
-                STATS["err"][p["name"]] = "обірвано (finish_reason=length)"
-                continue
-            if content:
-                STATS["ok"][p["name"]] = STATS["ok"].get(p["name"], 0) + 1
-                return content
-        except Exception as e:
-            all_rate_limited = False
-            print(f"❌ {p['name']}: {e}")
-            STATS["err"][p["name"]] = str(e)[:120]
-            continue
+                choice  = r.json()["choices"][0]
+                content = (choice.get("message", {}).get("content") or "").strip()
+                # finish_reason="length" = відповідь ОБІРВАНО на ліміті токенів.
+                # Так у канал потрапляли пости на півслові («...дворічну підтрим»):
+                # reasoning-моделі (gpt-oss-120b) палять max_tokens на «міркування»,
+                # і на сам текст їх не лишається. Обірване НЕ публікуємо — краще
+                # віддати наступному провайдеру (Cerebras — без «міркувань»).
+                if choice.get("finish_reason") == "length":
+                    print(f"⚠️ {p['name']}: відповідь обірвано на ліміті токенів — наступний провайдер.")
+                    STATS["err"][p["name"]] = "обірвано (finish_reason=length)"
+                    break
+                if content:
+                    STATS["ok"][p["name"]] = STATS["ok"].get(p["name"], 0) + 1
+                    return content
+            except Exception as e:
+                all_rate_limited = False
+                print(f"❌ {p['name']}: {e}")
+                STATS["err"][p["name"]] = str(e)[:120]
+                break
     return "RATE_LIMIT" if all_rate_limited else None
 
 def init_db():
@@ -1231,6 +1351,37 @@ def is_quiet_hour():
     return hour >= QUIET_FROM_HOUR or hour < QUIET_TO_HOUR
 
 
+def max_posts_now():
+    """Скільки постів дозволено цьому прогону: вночі — половина денної норми.
+
+    Тихий режим вище прибрав ЗВУК, але не ОБСЯГ, а це різні проблеми. Замір за
+    добу 16–17.08.2026: із 180 постів 61 (34%) вийшов у вікні 23:00–07:00, і
+    80% результативних прогонів уперлися в стелю. Тобто вночі канал працює з
+    денною інтенсивністю, і підписник зранку відкриває ~60 непрочитаних, де
+    удар по Ізюму лежить між «пророцтвами Баби Ванги» та «лелеками на
+    Прикарпатті». Звук вимкнено — але прокрутити це все одно треба, і саме
+    тут важливі новини й губляться.
+
+    Чому 1, а не 0: вночі трапляється найцінніше для цього каналу (масовані
+    атаки), і глушити ніч повністю означало б втрачати саме їх. Одиниця
+    зрізає хвіст, а не голову: курація сортує кандидатів за важливістю, тож
+    єдиний нічний пост — це ТОП-подія прогону. Бонусом вона дістає найсильнішу
+    доступну модель (rewrite_with_ai викликається з save_strong=count > 0,
+    а для першого поста прогону count == 0).
+
+    max_pick у curate_with_ai свідомо НЕ чіпаємо: пул кандидатів лишається
+    денним (4), тобто вночі модель обирає найкраще з чотирьох, а не з двох.
+    Невідібране в skipped не потрапляє й повертається кандидатом наступного
+    прогону — застою немає.
+
+    Вікно «ночі» береться з is_quiet_hour() навмисно: одне поняття ночі на
+    весь проект. Зміна QUIET_*_HOUR автоматично рухає і звук, і обсяг.
+
+    ЯК ВІДКОТИТИ: повернути `return MAX_POSTS_PER_RUN` першим рядком.
+    """
+    return 1 if is_quiet_hour() else MAX_POSTS_PER_RUN
+
+
 def post_to_telegram(text, url, image_url=None, sources=None):
     full_text   = format_post_html(text, url, sources)
     valid_image = image_url and is_valid_image(image_url)
@@ -1497,7 +1648,7 @@ def main():
         print("↩️ Курація недоступна — запасний лексичний шлях")
 
     for item in picked:
-        if count >= MAX_POSTS_PER_RUN:
+        if count >= max_posts_now():   # вночі — 1, удень — MAX_POSTS_PER_RUN
             break
         if not item["url"]:
             continue
