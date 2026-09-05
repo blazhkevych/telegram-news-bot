@@ -264,6 +264,21 @@ LLM_PROVIDERS = [p for p in [
      "models": ["@cf/openai/gpt-oss-120b",
                 "@cf/google/gemma-4-26b-a4b-it",
                 "@cf/meta/llama-4-scout-17b-16e-instruct"]},
+    {"name": "Gemini",
+     "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+     "key":  os.environ.get("GEMINI_API_KEY"),
+     # Перед NVIDIA: у перевірному прогоні 05.09 Gemini дав 4 успіхи, NVIDIA
+     # — три таймаути по 20 с. Квоти в Gemini теж помодельні: 05.09 о 03:00 UTC
+     # gemini-3.5-flash уже віддавав 429, а gemini-flash-latest — 200, але
+     # старий `break` до нього не доходив. gemini-3.8-flash — найновіша
+     # стабільна (ai.google.dev/gemini-api/docs/models), 3.5-flash-lite має
+     # більший добовий ліміт запитів. Google урізає безкоштовні квоти без
+     # попередження — точні цифри лише в AI Studio.
+     "models": ["gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.5-flash",
+                "gemini-flash-latest"],
+     "per_model_limit": True},
     {"name": "NVIDIA",
      # build.nvidia.com (NIM): ліміт лише 40 запитів/хв, БЕЗ обмеження обсягу.
      # Плата — надійність: потужність спільна для всіх безкоштовних акаунтів,
@@ -280,24 +295,13 @@ LLM_PROVIDERS = [p for p in [
      # заміром секунд. Модель, що впала в таймаут, до кінця прогону не
      # викликається (див. _SLOW_MODELS у call_llm). Каталог відкритий без ключа:
      #   curl -s https://integrate.api.nvidia.com/v1/models
+     # Перевірний прогін 05.09: nemotron-nano-3-30b-a3b — 404 (є в каталозі,
+     # але не подається), lightning / deepseek / super — усі три в таймаут.
+     # Тому NVIDIA — ОСТАННІЙ у ланцюзі (кожен таймаут = 20 с), а моделей три,
+     # щоб верхня межа втрат на прогін була 60 с.
      "models": ["nvidia/nemotron-3.5-lightning-30b-a3b",
-                "nvidia/nemotron-nano-3-30b-a3b",
-                "deepseek-ai/deepseek-v4-flash-0731",
-                "nvidia/nemotron-3-super-120b-a12b"]},
-    {"name": "Gemini",
-     "url":  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-     "key":  os.environ.get("GEMINI_API_KEY"),
-     # Останній резерв. Квоти в Gemini теж помодельні: 05.09 о 03:00 UTC
-     # gemini-3.5-flash уже віддавав 429, а gemini-flash-latest — 200, але
-     # старий `break` до нього не доходив. gemini-3.8-flash — найновіша
-     # стабільна (ai.google.dev/gemini-api/docs/models), 3.5-flash-lite має
-     # більший добовий ліміт запитів. Google урізає безкоштовні квоти без
-     # попередження — точні цифри лише в AI Studio.
-     "models": ["gemini-3.8-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-3.5-flash",
-                "gemini-flash-latest"],
-     "per_model_limit": True},
+                "google/gemma-4-31b-it",
+                "deepseek-ai/deepseek-v4-flash-0731"]},
     # ⚰️ Cerebras ВИДАЛЕНО (БАГ-017, 05.09.2026). 21.07.2026 Cerebras замінив
     # безкоштовний тариф на разові $5 кредитів із прив'язкою картки; відтоді
     # кожен виклик — 402 «Payment required». llm_check писав «ПРИБРАТИ З
@@ -340,7 +344,27 @@ _DEAD_MODELS = set()
 # перезапуск раз на 15 хв дає безкоштовну повторну перевірку.
 _SLOW_MODELS    = set()   # модель не встигла за LLM_TIMEOUT у цьому прогоні
 _LIMITED_MODELS = set()   # 429 у провайдера з помодельною квотою
-_DEAD_PROVIDERS = set()   # 4xx (крім 429/404), 5xx або мережева помилка
+_DEAD_PROVIDERS = set()   # 401/402/403 або мережева помилка
+
+
+def reasoning_params(model):
+    """Параметри, що прикручують «міркування» моделі до мінімуму.
+
+    Одне місце для bot.py і llm_check.py: пробник має слати ТОЙ САМИЙ запит,
+    що й бойовий код, інакше він міряє не те (БАГ-017).
+
+    gpt-oss: приймає лише low/medium/high, "none" → 400; "low" — підлога.
+    Qwen 3.x на Groq: за замовчуванням «думає» і з'їдає max_tokens — у
+    перевірному прогоні 05.09 три відповіді поспіль обірвано на ліміті
+    (finish_reason=length). Groq документує reasoning_effort="none" саме як
+    вимикач цього режиму. Якщо якийсь провайдер параметра не знає і віддає
+    400 — call_llm вимикає лише цю модель до кінця прогону, не провайдера.
+    """
+    if "gpt-oss" in model:
+        return {"reasoning_effort": "low"}
+    if "qwen" in model.lower():
+        return {"reasoning_effort": "none"}
+    return {}
 
 
 def models_of(p):
@@ -448,8 +472,7 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
             # gpt-oss у тих самих провайдерів стоять Qwen/Gemma/Llama, які цього
             # параметра не знають — на них він поїхав би зайвим полем і міг би
             # завалити запасний шлях саме тоді, коли він потрібен.
-            if "gpt-oss" in model:
-                body["reasoning_effort"] = "low"
+            body.update(reasoning_params(model))
             try:
                 r = requests.post(
                     p["url"],
@@ -485,16 +508,26 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
                     STATS["err"][p["name"]] = f"модель {model} закрито ({r.status_code})"
                     continue
                 if r.status_code >= 400:
-                    # raise_for_status показує лише статус+URL (URL ще й обрізається
-                    # логом до 70 симв. → «...generativelanguage.google»). Тіло
-                    # відповіді містить справжню причину (модель/ключ/API вимкнено).
+                    # Тіло відповіді містить справжню причину (модель/ключ/API
+                    # вимкнено) — raise_for_status показав би лише статус+URL.
                     all_rate_limited = False
                     reason = " ".join((r.text or "").split())
-                    print(f"❌ {p['name']}: {r.status_code} — {reason[:300]} "
-                          f"(до кінця прогону не викликаю)")
                     STATS["err"][p["name"]] = f"{r.status_code}: {reason[:120]}"
-                    _DEAD_PROVIDERS.add(p["name"])
-                    break
+                    if r.status_code in (401, 402, 403):
+                        # Ключ/підписка/доступ — це про АКАУНТ, запасна модель
+                        # не допоможе: провайдер до кінця прогону вимкнено.
+                        print(f"❌ {p['name']}: {r.status_code} — {reason[:300]} "
+                              f"(до кінця прогону не викликаю)")
+                        _DEAD_PROVIDERS.add(p["name"])
+                        break
+                    # 400 (модель не знає параметра) чи 5xx (Gemini 503 «high
+                    # demand», NVIDIA 529) — біда САМЕ ЦІЄЇ моделі. Сусідня в
+                    # того ж провайдера може відповісти — 05.09 після 503 на
+                    # одній моделі Gemini інша дала 4 успішні виклики.
+                    _SLOW_MODELS.add(model)
+                    print(f"❌ {p['name']}: {model} — {r.status_code} {reason[:200]} "
+                          f"(модель до кінця прогону не викликаю)")
+                    continue
                 all_rate_limited = False
                 choice  = r.json()["choices"][0]
                 content = (choice.get("message", {}).get("content") or "").strip()
@@ -711,8 +744,8 @@ def is_spam(title, summary):
 _RU_LETTERS = re.compile(r"[ыэъё]")
 _RU_WORDS   = re.compile(
     r"\b(это|этот|эта|что|чтобы|или|если|как|его|её|они|который|которая|"
-    r"которые|также|здесь|сейчас|уже|ещё|очень|только|после|через|между|"
-    r"из|из-за|от|около|против|со|во|обо)\b")
+    r"которые|также|здесь|сейчас|ещё|очень|только|после|между|"
+    r"из|из-за|около|против|со|во|обо)\b")
 
 def is_russian(title, summary):
     text = (title + " " + summary).lower()

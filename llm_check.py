@@ -32,7 +32,7 @@ import time
 
 import requests
 
-from bot import LLM_PROVIDERS, LLM_TIMEOUT, models_of, notify_admin
+from bot import LLM_PROVIDERS, LLM_TIMEOUT, models_of, notify_admin, reasoning_params
 
 # Пробник — СПРАВЖНЯ генерація, а не «ping» на 5 токенів. Аудит 05.09.2026
 # (БАГ-017): NVIDIA deepseek-v4-flash відповідав на п'ятитокенний пробник за
@@ -100,8 +100,7 @@ def in_catalog(model, ids):
 def probe(p, model):
     """Реальний виклик КОНКРЕТНОЇ моделі. Повертає (значок, пояснення)."""
     body = {"model": model, "messages": PROBE, "max_tokens": PROBE_TOKENS}
-    if "gpt-oss" in model:
-        body["reasoning_effort"] = "low"     # як у бойовому call_llm
+    body.update(reasoning_params(model))     # той самий запит, що в call_llm
     t0 = time.monotonic()
     try:
         r = requests.post(
