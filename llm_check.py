@@ -28,12 +28,23 @@ life», БАГ-016): провайдер був справний, а модель
 
 У GitHub Actions запускається сам, раз на добу — див. scheduler.py.
 """
+import time
+
 import requests
 
-from bot import LLM_PROVIDERS, models_of, notify_admin
+from bot import LLM_PROVIDERS, LLM_TIMEOUT, models_of, notify_admin
 
-# Найдешевший можливий запит: нам важливий СТАТУС, а не текст відповіді.
-PROBE = [{"role": "user", "content": "ping"}]
+# Пробник — СПРАВЖНЯ генерація, а не «ping» на 5 токенів. Аудит 05.09.2026
+# (БАГ-017): NVIDIA deepseek-v4-flash відповідав на п'ятитокенний пробник за
+# 30 с і отримував «✅ працює», а в бою за LLM_TIMEOUT не встигав у 99%
+# викликів (1 054 таймаути на 8 успіхів за добу). Перевірка, яка міряє не те,
+# що робить бойовий код, гірша за відсутню: їй вірять. Тому — приблизно той
+# самий обсяг, що в rewrite (кілька сотень токенів), той самий таймаут, і в
+# звіті — секунди.
+PROBE = [{"role": "user", "content":
+          "Напиши українською три речення про те, чому Київ називають містом "
+          "каштанів. Без вступу й списків."}]
+PROBE_TOKENS = 300
 
 # Класифікація за HTTP-статусом. Ключове рішення скрипта — до якої з трьох
 # груп віднести провайдера, бо від цього залежить, що робити власнику.
@@ -88,18 +99,27 @@ def in_catalog(model, ids):
 
 def probe(p, model):
     """Реальний виклик КОНКРЕТНОЇ моделі. Повертає (значок, пояснення)."""
+    body = {"model": model, "messages": PROBE, "max_tokens": PROBE_TOKENS}
+    if "gpt-oss" in model:
+        body["reasoning_effort"] = "low"     # як у бойовому call_llm
+    t0 = time.monotonic()
     try:
         r = requests.post(
             p["url"],
             headers={"Authorization": f"Bearer {p['key']}",
                      "Content-Type": "application/json"},
-            json={"model": model, "messages": PROBE, "max_tokens": 5},
-            timeout=30,
+            json=body,
+            timeout=LLM_TIMEOUT,
         )
+    except requests.exceptions.Timeout:
+        # Не смерть, але й не «працює»: у бою call_llm цю модель теж не
+        # дочекається. Окремий значок, щоб у звіті це не зливалось із 5xx.
+        return "🐢", f"не встигла за {LLM_TIMEOUT} с — у бою марна"
     except Exception as e:
-        # Таймаут — НЕ смерть: NVIDIA на безкоштовному тарифі ділить потужність
-        # між усіма і регулярно віддає 529/таймаут, лишаючись робочою.
+        # NVIDIA на безкоштовному тарифі ділить потужність між усіма і
+        # регулярно віддає 529/обрив з'єднання, лишаючись робочою.
         return "⚠️", f"мережа: {str(e)[:60]}"
+    took = time.monotonic() - t0
 
     if r.status_code in FATAL:
         return "⚰️", f"{r.status_code} — {FATAL[r.status_code]}"
@@ -109,18 +129,26 @@ def probe(p, model):
         return "⚠️", f"{r.status_code} — перевантажений, тимчасово"
     if r.status_code >= 400:
         return "⚰️", f"{r.status_code} — {' '.join((r.text or '').split())[:80]}"
-    return "✅", "працює"
+    try:
+        choice  = r.json()["choices"][0]
+        content = (choice.get("message", {}).get("content") or "").strip()
+    except Exception:
+        return "⚰️", "200, але відповідь не в форматі OpenAI"
+    if not content:
+        return "⚰️", "200, але порожня відповідь"
+    cut = " (обірвано: finish_reason=length)" if choice.get("finish_reason") == "length" else ""
+    return "✅", f"працює, {took:.1f} с{cut}"
 
 
 def main():
-    lines, dead = [], []
+    lines, dead, slow = [], [], []
     alive = 0
     for p in LLM_PROVIDERS:
         cat = catalog(p)
         # Перевіряємо ВСІ моделі провайдера, а не лише першу: сенс запасних у
         # тому, щоб на момент смерті основної вже знати, що заміна робоча.
         # Дізнатись про це в бойовому прогоні — запізно.
-        ok_here = False
+        ok_here, slow_here = False, False
         for i, model in enumerate(models_of(p)):
             mark, why = probe(p, model)
             # Про каталог згадуємо, лише коли він СУПЕРЕЧИТЬ конфігу: «моделі
@@ -130,14 +158,20 @@ def main():
             lines.append(f"{mark} {p['name']} / {model} ({role}): {why}{note}")
             if mark in ("✅", "🟡"):
                 ok_here = True
+            elif mark == "🐢":
+                slow_here = True
         if ok_here:
             alive += 1
+        elif slow_here:
+            slow.append(p["name"])   # живий, але жодна модель не встигає
         else:
             dead.append(p["name"])
 
     head = (f"🤖 Перевірка LLM: {alive} із {len(LLM_PROVIDERS)} придатні"
             + (f"\n☠️ ПРИБРАТИ З ЛАНЦЮГА: {', '.join(dead)} — "
-               f"кожен виклик до них гарантовано марний" if dead else ""))
+               f"кожен виклик до них гарантовано марний" if dead else "")
+            + (f"\n🐢 ЗАМІНИТИ МОДЕЛІ: {', '.join(slow)} — жодна не встигає за "
+               f"{LLM_TIMEOUT} с, у бою це лише таймаути" if slow else ""))
 
     report = head + "\n\n" + "\n".join(lines)
     print(report)

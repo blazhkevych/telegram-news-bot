@@ -63,14 +63,21 @@ jobs:
           TELEGRAM_CHANNEL_USERNAME: ${{ secrets.TELEGRAM_CHANNEL_USERNAME }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          # CEREBRAS_API_KEY прибрано (БАГ-017, 05.09.2026): з 21.07.2026
+          # безкоштовного тарифу немає, кожен виклик — 402 «Payment required».
           # MISTRAL_API_KEY прибрано (ревізія 17.08.2026): провайдер віддавав
           # 402 «Check your subscription» на кожному виклику ≈ 660 марних
           # запитів на добу. Безкоштовного плану для цієї моделі більше немає.
-          # Cloudflare Workers AI — 10 тис. «нейронів»/добу ≈ 1 300 відповідей,
-          # без картки. Потрібні ОБИДВА секрети, інакше провайдер сам себе
-          # вимикає (URL збирається з account_id — див. LLM_PROVIDERS у bot.py).
+          # SambaNova Cloud — 200 тис. токенів/добу на КОЖНУ модель, без
+          # картки (docs.sambanova.ai → rate limits). Секрет ще не заведено:
+          # ключ береться на cloud.sambanova.ai, без нього нога просто неактивна.
+          SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
+          # Cloudflare Workers AI — 10 тис. «нейронів»/добу ≈ 130 відповідей
+          # gpt-oss-120b (стара оцінка «1 300» була завищена вдесятеро, див.
+          # LLM_PROVIDERS у bot.py), без картки. Потрібні ОБИДВА секрети, інакше
+          # провайдер сам себе вимикає (URL збирається з account_id). Станом
+          # на 05.09.2026 обидва секрети порожні — нога не працює.
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           FEEDBACK_BOT_TOKEN: ${{ secrets.FEEDBACK_BOT_TOKEN }}

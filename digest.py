@@ -3,7 +3,7 @@ import html
 import requests
 import sqlite3
 from datetime import datetime, date
-from bot import call_llm   # той самий ланцюг провайдерів (Groq→Cerebras→Gemini)
+from bot import call_llm   # той самий ланцюг провайдерів (див. LLM_PROVIDERS у bot.py)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHANNEL_ID     = os.environ["TELEGRAM_CHANNEL_ID"]
