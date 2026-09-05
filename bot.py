@@ -230,19 +230,21 @@ LLM_PROVIDERS = [p for p in [
                 "openai/gpt-oss-20b"],
      "per_model_limit": True,
      "top":  True},
-    # SambaNova Cloud — доданий 05.09.2026. Безкоштовний тариф без картки:
-    # 200 тис. токенів/добу НА КОЖНУ модель, 20 запитів/хв, OpenAI-сумісний
-    # ендпоінт (docs.sambanova.ai/docs/en/models/rate-limits). У каталозі —
-    # той самий gpt-oss-120b, тобто якість без втрат, плюс ще чотири окремі
-    # квоти. Активується сам, щойно в секретах з'явиться SAMBANOVA_API_KEY.
-    {"name": "SambaNova",
-     "url":  "https://api.sambanova.ai/v1/chat/completions",
-     "key":  os.environ.get("SAMBANOVA_API_KEY"),
-     "models": ["gpt-oss-120b",
-                "DeepSeek-V3.2",
-                "Meta-Llama-3.3-70B-Instruct",
-                "gemma-4-31B-it"],
-     "per_model_limit": True},
+    # ⚰️ SambaNova Cloud — доданий і ВИМКНЕНИЙ того ж дня, 05.09.2026.
+    # Документація обіцяє 200 тис. токенів/добу на модель без картки, але
+    # перший же бойовий прогін дав 402 PAYMENT_METHOD_REQUIRED з
+    # balance_units=0: новим акаунтам (з серпня 2026, за скаргами на
+    # community.sambanova.ai) $5 кредитів без картки більше не дають.
+    # Той самий клас, що Cerebras/Mistral: платити — суперечить умові проекту.
+    # Секрет SAMBANOVA_API_KEY у news_bot.yml лишається, запис нижче — ні:
+    # інакше кожен прогін починався б із двох мертвих викликів.
+    # ⏭ ЯК ПОВЕРНУТИ: розкоментувати; llm_check покаже 200 замість 402.
+    # {"name": "SambaNova",
+    #  "url":  "https://api.sambanova.ai/v1/chat/completions",
+    #  "key":  os.environ.get("SAMBANOVA_API_KEY"),
+    #  "models": ["gpt-oss-120b", "DeepSeek-V3.2",
+    #             "Meta-Llama-3.3-70B-Instruct", "gemma-4-31B-it"],
+    #  "per_model_limit": True},
     # Cloudflare Workers AI — доданий 17.08.2026, але секрети CF_ACCOUNT_ID /
     # CF_API_TOKEN так і не задано (аудит 05.09: у логах прогону обидва
     # порожні), тож нога досі не працювала жодного разу.
@@ -418,7 +420,7 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
     перші години ~400 викликами, і решту дня ВСЕ писала слабка gemma (звідси
     одруки «дешею», «всіій»). Тепер сильна модель дістається найважливішому
     (курація + топ-подія кожного прогону = ~200 викликів, розтягнутих на
-    добу), а добивка йде на резервні ноги (SambaNova/Cloudflare/NVIDIA/Gemini).
+    добу), а добивка йде на резервні ноги (Cloudflare/Gemini/NVIDIA).
     Якщо резервні впали — Groq усе одно підстрахує (він у кінці черги).
 
     ПАМ'ЯТЬ ПРОГОНУ (аудит 05.09.2026, БАГ-017). Раніше кожен виклик заново
