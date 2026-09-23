@@ -177,6 +177,11 @@ MAX_POSTS_PER_RUN = 2
 FEEDBACK_TOKEN = os.environ.get("FEEDBACK_BOT_TOKEN")
 ADMIN_ID       = os.environ.get("ADMIN_CHAT_ID")
 STATS = {"ok": {}, "err": {}}   # провайдер -> лічильник успіхів / остання помилка
+# Хто відповів останнім: (провайдер, модель). До 23.09 у лозі був лише
+# провайдер («Groq×3»), і з'ясувати, ЯКА модель пише браковані пости, можна
+# було тільки реконструкцією з послідовності ⚠️-рядків (БАГ-019).
+LAST_MODEL = None
+MODEL_OK = {}                   # модель -> лічильник успіхів (для «🧩 Поіменно»)
 
 def notify_admin(text):
     """Короткий підсумок роботи адміну (якщо задано креди фідбек-бота)."""
@@ -218,16 +223,24 @@ LLM_PROVIDERS = [p for p in [
     {"name": "Groq",
      "url":  "https://api.groq.com/openai/v1/chat/completions",
      "key":  os.environ.get("GROQ_API_KEY"),
-     # Чотири моделі = чотири окремі добові квоти по 200 тис. токенів. Порядок
-     # — за якістю: gpt-oss-120b (та сама, що була в Cerebras), потім Qwen 3.8
-     # 27B (новіша), Qwen 3.6, і 20B як добивка. llama-3.3-70b з безкоштовного
-     # плану Groq прибрано 26.08.2026 («Enterprise / Contact Sales») — не
-     # повертати. Показово: llm_check раніше бачив 200 на п'ятитокенному
-     # пробнику, а бойові виклики ловили 429 — ліміт саме ТОКЕННИЙ.
+     # Кожна модель = окрема добова квота по 200 тис. токенів. Порядок — за
+     # якістю: gpt-oss-120b (та сама, що була в Cerebras), потім Qwen 3.8 27B.
+     # llama-3.3-70b з безкоштовного плану Groq прибрано 26.08.2026
+     # («Enterprise / Contact Sales») — не повертати. Показово: llm_check
+     # раніше бачив 200 на п'ятитокенному пробнику, а бойові виклики ловили
+     # 429 — ліміт саме ТОКЕННИЙ.
+     #
+     # АУДИТ 23.09.2026 (БАГ-019), дві моделі пішли звідси:
+     # • qwen/qwen3.6-27b — Groq зняв її 16.09: 404 «модель не існує» і «немає
+     #   в каталозі» в llm_check щоранку, у бою — 72 мертві виклики на добу.
+     # • openai/gpt-oss-20b — жива, але переїхала в САМИЙ КІНЕЦЬ ланцюга
+     #   (окремий запис "Groq-20b" нижче). Тут вона була четвертою в
+     #   провайдера, що стоїть першим для курації й головного поста прогону.
+     #   120b після курації щоразу в ліміті, qwen3.8 — у 72 прогонах зі 102,
+     #   тож головний пост діставався найслабшій моделі: 38 з 87 за добу. З
+     #   її 40 постів 14 вийшли без заголовка (у решти моделей — 3 з 91).
      "models": ["openai/gpt-oss-120b",
-                "qwen/qwen3.8-27b",
-                "qwen/qwen3.6-27b",
-                "openai/gpt-oss-20b"],
+                "qwen/qwen3.8-27b"],
      "per_model_limit": True,
      "top":  True},
     # ⚰️ SambaNova Cloud — доданий і ВИМКНЕНИЙ того ж дня, 05.09.2026.
@@ -299,11 +312,26 @@ LLM_PROVIDERS = [p for p in [
      #   curl -s https://integrate.api.nvidia.com/v1/models
      # Перевірний прогін 05.09: nemotron-nano-3-30b-a3b — 404 (є в каталозі,
      # але не подається), lightning / deepseek / super — усі три в таймаут.
-     # Тому NVIDIA — ОСТАННІЙ у ланцюзі (кожен таймаут = 20 с), а моделей три,
-     # щоб верхня межа втрат на прогін була 60 с.
+     # Тому NVIDIA — в кінці ланцюга (кожен таймаут = 20 с), а моделей дві,
+     # щоб верхня межа втрат на прогін була 40 с.
+     # deepseek-ai/deepseek-v4-flash-0731 прибрано 23.09.2026: з 22.09 — 410
+     # «закрито назавжди», у каталозі її вже немає (та сама доля, що в
+     # deepseek-v4-flash 07.08, див. БАГ-016).
      "models": ["nvidia/nemotron-3.5-lightning-30b-a3b",
-                "google/gemma-4-31b-it",
-                "deepseek-ai/deepseek-v4-flash-0731"]},
+                "google/gemma-4-31b-it"]},
+    # gpt-oss-20b — ОСТАННІЙ ШАНС, а не робоча конячка (БАГ-019, 23.09.2026).
+    # Той самий ключ і квота Groq, але окремий запис із "last": call_llm ставить
+    # його в самий кінець черги за будь-якого save_strong — після Cloudflare,
+    # Gemini й NVIDIA. Модель швидка й майже завжди має квоту, тому в рідкісну
+    # годину, коли решта в ліміті, вона ще врятує прогін; а її брак формату
+    # тепер ловить is_bad_output і віддає пост на переписування іншій моделі.
+    # Окрема назва — щоб у «📈 Моделі» було видно, як часто доходить до неї.
+    {"name": "Groq-20b",
+     "url":  "https://api.groq.com/openai/v1/chat/completions",
+     "key":  os.environ.get("GROQ_API_KEY"),
+     "models": ["openai/gpt-oss-20b"],
+     "per_model_limit": True,
+     "last": True},
     # ⚰️ Cerebras ВИДАЛЕНО (БАГ-017, 05.09.2026). 21.07.2026 Cerebras замінив
     # безкоштовний тариф на разові $5 кредитів із прив'язкою картки; відтоді
     # кожен виклик — 402 «Payment required». llm_check писав «ПРИБРАТИ З
@@ -411,9 +439,48 @@ def is_model_gone(r):
                                    "no longer available", "unknown model"))
 
 
-def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
+def limit_hint(r):
+    """Який саме ліміт спрацював — коротко, для рядка ⚠️ у лозі.
+
+    Навіщо (аудит 23.09.2026): gpt-oss-120b у Groq ловить 429 у 101 прогоні зі
+    102 — рівно після одного виклику (курації), — а llm_check о 03:00 отримує
+    від неї відповідь за 0,5 с. Схоже на ліміт токенів на ХВИЛИНУ, а не на
+    добу, але тіло 429 не друкувалось, тож довести було нічим. А від відповіді
+    залежить рішення: хвилинний ліміт лікується короткою паузою, добовий — ні.
+
+    Тіло цілком НЕ друкуємо: у Groq там ідентифікатор організації, а логи
+    Actions публічного репо видно всім. Беремо лише тип ліміту й цифри.
+    """
+    body = " ".join((r.text or "").split())
+    hint = ""
+    # Groq: «... on tokens per minute (TPM): Limit 8000, Used 6844,
+    # Requested 2952. Please try again in 13.7s.»
+    m = re.search(r"per (?:minute|day) \((\w+)\): Limit (\d+)"
+                  r"(?:, Used (\d+))?, Requested (\d+)", body)
+    if m:
+        hint = f"{m.group(1)}: ліміт {m.group(2)}"
+        if m.group(3):
+            hint += f", використано {m.group(3)}"
+        hint += f", запит {m.group(4)}"
+    else:
+        # Gemini: "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+        m = re.search(r'"quotaId":\s*"([^"]+)"', r.text or "")
+        if m:
+            hint = m.group(1)
+    wait = r.headers.get("retry-after")
+    if wait:
+        hint += (", " if hint else "") + f"retry-after {wait} с"
+    return f" [{hint}]" if hint else ""
+
+
+def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False,
+             skip_models=()):
     """Пробує провайдерів по черзі. Повертає текст, 'RATE_LIMIT' (усі в ліміті)
     або None (усі впали з іншої причини).
+
+    skip_models — моделі, яких у ЦЬОМУ виклику не питати (повтор після браку:
+    пост має переписати інша модель, а не та сама вдруге). Провайдер із "last"
+    завжди йде в самий кінець черги — див. запис "Groq-20b".
 
     save_strong=True — бережемо найсильнішу модель (першу в списку): черга
     починається з резервних. Навіщо: добовий ліміт Groq (120B) з'їдався за
@@ -443,13 +510,17 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
         # «Дорогі» моделі (top: сильні, але з куцим добовим лімітом) — у кінець
         providers = ([p for p in LLM_PROVIDERS if not p.get("top")]
                      + [p for p in LLM_PROVIDERS if p.get("top")])
+    # «Останній шанс» — у кінець за будь-якого порядку (БАГ-019).
+    providers = ([p for p in providers if not p.get("last")]
+                 + [p for p in providers if p.get("last")])
+    global LAST_MODEL
     all_rate_limited = True
     for p in providers:
         if p["name"] in _DEAD_PROVIDERS:
             continue          # у цьому прогоні вже впав — не марнуємо час
         for model in models_of(p):
             if (model in _DEAD_MODELS or model in _SLOW_MODELS
-                    or model in _LIMITED_MODELS):
+                    or model in _LIMITED_MODELS or model in skip_models):
                 continue      # у цьому прогоні вже впевнились, що вона не відповість
             body = {"model": model,
                     "messages": [{"role": "user", "content": prompt}],
@@ -493,9 +564,11 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
                                if m not in _LIMITED_MODELS and m not in _DEAD_MODELS
                                and m not in _SLOW_MODELS]
                         print(f"⚠️ {p['name']}: {model} у ліміті — "
-                              + (f"беру {nxt[0]}" if nxt else "моделей більше немає"))
+                              + (f"беру {nxt[0]}" if nxt else "моделей більше немає")
+                              + limit_hint(r))
                         continue
-                    print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера.")
+                    print(f"⚠️ {p['name']} ліміт — пробуємо наступного провайдера."
+                          + limit_hint(r))
                     break     # ліміт на акаунт — решта його моделей уперлася б
                               # у ту саму квоту
                 if is_model_gone(r):
@@ -504,7 +577,11 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
                     # проблема ключа/доступу, там запасна модель не допоможе.
                     all_rate_limited = False
                     _DEAD_MODELS.add(model)
-                    nxt = [m for m in models_of(p) if m not in _DEAD_MODELS]
+                    # Лише ті, кого справді ще спитаємо: до 23.09 тут писалось
+                    # «перемикаюсь на gpt-oss-120b», хоч вона вже була в ліміті.
+                    nxt = [m for m in models_of(p)
+                           if m not in _DEAD_MODELS and m not in _LIMITED_MODELS
+                           and m not in _SLOW_MODELS]
                     print(f"⚰️ {p['name']}: модель {model} закрито ({r.status_code}) — "
                           + (f"перемикаюсь на {nxt[0]}" if nxt else "запасних немає"))
                     STATS["err"][p["name"]] = f"модель {model} закрито ({r.status_code})"
@@ -544,6 +621,8 @@ def call_llm(prompt, max_tokens=900, temperature=0.4, save_strong=False):
                     break
                 if content:
                     STATS["ok"][p["name"]] = STATS["ok"].get(p["name"], 0) + 1
+                    LAST_MODEL = (p["name"], model)
+                    MODEL_OK[model] = MODEL_OK.get(model, 0) + 1
                     return content
             except requests.exceptions.Timeout:
                 # Не встигла САМЕ ЦЯ модель — сусідня в того ж провайдера може
@@ -1230,7 +1309,28 @@ def is_relevant(title, summary):
     ]
     return any(kw in text for kw in relevant_keywords)
 
-def rewrite_with_ai(item, save_strong=False):
+_MONTHS_GEN = ("січня", "лютого", "березня", "квітня", "травня", "червня",
+               "липня", "серпня", "вересня", "жовтня", "листопада", "грудня")
+_WEEKDAYS   = ("понеділок", "вівторок", "середа", "четвер", "пʼятниця",
+               "субота", "неділя")
+
+
+def today_kyiv():
+    """«23 вересня 2026 року, середа» — сьогоднішня дата для промпту.
+
+    Навіщо (БАГ-019): у промпті не було дати, і модель заповнювала прогалину
+    роком зі своїх навчальних даних — «Україна деокупувала 800 км² у 2024 р.»,
+    коли в джерелі стояло «цього року» (msg 15827, 23.09.2026).
+    """
+    try:
+        import pytz
+        d = datetime.now(pytz.timezone("Europe/Kiev"))
+    except Exception:
+        d = datetime.utcnow()
+    return f"{d.day} {_MONTHS_GEN[d.month - 1]} {d.year} року, {_WEEKDAYS[d.weekday()]}"
+
+
+def rewrite_with_ai(item, save_strong=False, skip_models=()):
     lang_note = (
         "Новина англійською — переклади та перепиши українською."
         if item["lang"] == "en"
@@ -1329,6 +1429,9 @@ SKIP відповідай лише у крайньому разі:
 
 ТОЧНІСТЬ (найважливіше — від цього залежить довіра до каналу):
 - Пиши ЛИШЕ те, що є в тексті джерела. Нічого не додумуй.
+- Сьогодні {today_kyiv()}. Відносні дати («цього року», «вчора», «у
+  понеділок») лиши як у джерелі — не перетворюй їх на конкретне число чи рік.
+  Рік пиши лише тоді, коли він є в джерелі.
 - Імена, прізвища, посади й назви залишай точно як у джерелі.
 - НЕ вигадуй стать людини. Орієнтуйся на те, як узгоджені слова в самому
   джерелі: якщо там «прем'єр Свириденко заявила» — пиши «заявила», не «заявив».
@@ -1356,7 +1459,7 @@ SKIP відповідай лише у крайньому разі:
     # (16.07 це стабільно ловив Gemini). Стеля — це ЗАПАС, а не витрата:
     # моделі, що не «думають», більше токенів не згенерують.
     return call_llm(prompt, max_tokens=2400, temperature=0.2,
-                    save_strong=save_strong)
+                    save_strong=save_strong, skip_models=skip_models)
 
 
 # ---------------------------------------------------------------------------
@@ -1395,6 +1498,35 @@ _HEADLINE_MAX = 160
 _POST_MIN = 80
 
 
+def _letters(s):
+    return len(re.findall(r"[^\W\d_]", s))
+
+
+def attach_lone_emoji(text):
+    """«🚨\\n\\nЗаголовок\\n\\nТекст» → «🚨 Заголовок\\n\\nТекст».
+
+    Модель іноді ставить емодзі ОКРЕМИМ рядком. У каналі жирним тоді виходить
+    саме «🚨», а справжній заголовок стоїть під ним звичайним текстом. Замір
+    23.09.2026 (237 постів за 2 доби): такий відрив — у 6 постах, і ВСІ шість
+    мали нормальний заголовок другим рядком (54–103 символи, без крапки).
+    Це лагодиться склеюванням, переписувати нема чого.
+
+    Не чіпаємо, коли під емодзі йде АБЗАЦ (довгий або з крапкою в кінці) —
+    таких було 26 із 32, і там заголовка немає взагалі: це брак, його ловить
+    is_bad_output і віддає на переписування іншій моделі.
+    """
+    lines = text.strip().splitlines()
+    idx = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(idx) < 2:
+        return text
+    first, second = lines[idx[0]].strip(), lines[idx[1]].strip()
+    if _letters(first) >= 3:
+        return text                       # перший рядок і так змістовний
+    if len(second) > _HEADLINE_MAX or second.endswith("."):
+        return text                       # під емодзі абзац, а не заголовок
+    return "\n".join([f"{first} {second}"] + lines[idx[1] + 1:]).strip()
+
+
 def is_bad_output(text):
     """Чи є відповідь моделі НЕпридатною до публікації.
 
@@ -1420,6 +1552,14 @@ def is_bad_output(text):
     head = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
     if len(head) > _HEADLINE_MAX:
         return f"перший рядок не заголовок ({len(head)} символів)"
+    # БАГ-019: «🚨» окремим рядком, під ним одразу абзац. Перевірка на
+    # довжину цього не бачила — перший рядок короткий. За 22–23.09 так вийшло
+    # 26 постів (переважно gpt-oss-20b); серед 205 нормальних постів тих самих
+    # двох діб перший рядок без літер не траплявся жодного разу. Сюди доходить
+    # уже після attach_lone_emoji, тож відірваний, але справжній заголовок
+    # браком не вважається.
+    if _letters(head) < 3:
+        return "немає заголовка: перший рядок — лише емодзі"
 
     # Пост має бути українською. Якщо серед літер кирилиці менше половини —
     # модель відповіла не тією мовою (резервні провайдери іноді зриваються
@@ -1856,6 +1996,8 @@ def main():
         if post_text == "RATE_LIMIT":
             print("🛑 Усі провайдери в ліміті — зупиняємо прогін.")
             break
+        writer = LAST_MODEL
+        print(f"   ✍️ {writer[0]} / {writer[1]}")
         if post_text.strip().upper().startswith("SKIP"):
             print(f"⏭ AI пропустив: {item['title'][:50]}")
             # Запам'ятовуємо, інакше наступний прогін знову витратить на неї виклик.
@@ -1866,7 +2008,23 @@ def main():
         # ОСТАННІЙ ЗАПОБІЖНИК: модель повернула не пост, а свої міркування,
         # відмову чи службову розмітку. До 03.08 така відповідь ішла в канал
         # як новина (msg 7442) — перевірялося лише слово SKIP на початку.
+        post_text = attach_lone_emoji(post_text)
         bad = is_bad_output(post_text)
+        if bad:
+            # Брак — вада МОДЕЛІ, а не новини (БАГ-019): до 23.09 новина
+            # просто гинула як bad_output, хоча іншій моделі її досить було
+            # переписати. Одна повторна спроба — без моделі, що зіпсувала.
+            # Якщо переписати нікому (решта в ліміті) або вдруге брак — як
+            # раніше: skipped з причиною bad_output.
+            print(f"🔁 Брак від {writer[1]} ({bad}) — переписує інша модель")
+            retry = rewrite_with_ai(item, save_strong=count > 0,
+                                    skip_models={writer[1]})
+            if (retry and retry != "RATE_LIMIT"
+                    and not retry.strip().upper().startswith("SKIP")):
+                print(f"   ✍️ {LAST_MODEL[0]} / {LAST_MODEL[1]}")
+                retry = attach_lone_emoji(retry)
+                if not is_bad_output(retry):
+                    post_text, bad = retry, None
         if bad:
             print(f"🚫 Брак від моделі ({bad}): {item['title'][:50]}")
             mark_skipped(conn, item["url"], item["title"], "bad_output")
@@ -1932,6 +2090,7 @@ def main():
         # Дублюємо баланс моделей у stdout: у логах Actions видно, які
         # провайдери реально працюють (у Telegram-звіті це є, у логах не було).
         print("📈 Моделі: " + ", ".join(f"{k}×{v}" for k, v in STATS["ok"].items()))
+        print("🧩 Поіменно: " + ", ".join(f"{k}×{v}" for k, v in MODEL_OK.items()))
 
     # Підсумок адміну — лише коли є що сказати (щоб не спамити при частих запусках)
     if count > 0 or STATS["err"]:
